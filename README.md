@@ -25,6 +25,8 @@ Open <http://localhost:3000>, type a name and press **Practice** to play against
 
 To play with other people on the same Wi-Fi, give them `http://<your-computer's-IP>:3000`. **Quick Match** puts everyone who presses it into the same lobby; **Private Room** puts everyone who types the same room code together. Bots fill the remaining seats.
 
+On Android and iOS the game plays in landscape. Once the server is deployed behind HTTPS, "Add to Home Screen" in the browser menu installs it like an app that opens fullscreen.
+
 ## How to play
 
 1. You start under a parachute. Steer toward buildings: that is where most gear is.
@@ -133,6 +135,7 @@ tests/             Unit, match-rule and end-to-end tests
 scripts/
   render-map.mjs   writes a top-down PNG of the island
   browser-smoke.mjs two-browser multiplayer smoke test
+  make-icons.mjs   regenerates the app icons
 docs/DESIGN.md     the original design blueprint
 ```
 

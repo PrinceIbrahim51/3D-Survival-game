@@ -1,7 +1,7 @@
 // Heads-up display: all DOM, updated only when values change.
 
 import { WORLD_SIZE, WORLD_HALF, MAX_HP } from '/shared/constants.js';
-import { WEAPONS, AMMO, ARMOR, HEAL, MELEE, PACK_NAMES, ITEMS } from '/shared/items.js';
+import { WEAPONS, ARMOR, MELEE, ITEMS } from '/shared/items.js';
 import { POIS } from '/shared/world.js';
 
 const $ = (id) => document.getElementById(id);
@@ -312,8 +312,3 @@ export function causeText(cause) {
   return w ? `[${w.name}]` : 'eliminated';
 }
 
-export function healName(kind) {
-  return HEAL[kind] ? HEAL[kind].name : '';
-}
-
-export { AMMO, PACK_NAMES };

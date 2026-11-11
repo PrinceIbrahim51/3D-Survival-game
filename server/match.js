@@ -118,6 +118,7 @@ export class Match {
     this.clients.set(client.id, client);
     if (this.deadline === null) this.deadline = Date.now() + this.opts.lobbySeconds * 1000;
     if (this.clients.size >= this.opts.maxPlayers) this.deadline = Math.min(this.deadline, Date.now() + 3000);
+    this.checkReady();
     this.sendLobby();
   }
 
@@ -170,8 +171,15 @@ export class Match {
   update() {
     if (this.state === 'waiting') {
       const now = Date.now();
-      if (this.deadline !== null && now >= this.deadline) this.start();
-      else if (now - this.lastLobbySend >= 1000) this.sendLobby();
+      if (this.deadline !== null && now >= this.deadline) {
+        // A match needs at least two players (humans or bots) to mean anything.
+        const total = this.opts.bots ? Math.max(this.clients.size, this.opts.fillTo) : this.clients.size;
+        if (total >= 2) this.start();
+        else {
+          this.deadline = null;
+          this.sendLobby();
+        }
+      } else if (now - this.lastLobbySend >= 1000) this.sendLobby();
     } else if (this.state === 'playing') {
       this.step();
     } else if (this.state === 'ended' && Date.now() >= this.endAt) {

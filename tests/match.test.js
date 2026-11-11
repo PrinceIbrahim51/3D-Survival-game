@@ -296,6 +296,17 @@ test('lobby: readying up starts the match early, leaving empties it', () => {
   assert.equal(m.state, 'playing');
   assert.equal(a.msgs.at(-1).t, 'start');
 
+  // Without bots a lone player waits instead of starting an empty match.
+  const solo = new Match({ bots: false, lobbySeconds: 0 });
+  const s1 = fakeClient(9);
+  solo.addClient(s1);
+  solo.update();
+  assert.equal(solo.state, 'waiting');
+  assert.equal(s1.msgs.at(-1).startsIn, null);
+  solo.addClient(fakeClient(10));
+  solo.update();
+  assert.equal(solo.state, 'playing');
+
   const m2 = new Match({ bots: false, lobbySeconds: 600 });
   const c = fakeClient(3);
   m2.addClient(c);

@@ -242,7 +242,7 @@ net.on('lobby', (m) => {
   $('lobby-sub').textContent = m.mode === 'practice'
     ? `You against ${m.fillTo - 1} bots.`
     : `${humans} of ${m.max} players${m.bots ? ', bots fill up to ' + m.fillTo : ''}. Ready up to start sooner.`;
-  $('lobby-count').textContent = m.startsIn === null ? '' : m.startsIn > 0 ? 'Starts in ' + m.startsIn : 'Starting...';
+  $('lobby-count').textContent = m.startsIn === null ? 'Waiting for another player' : m.startsIn > 0 ? 'Starts in ' + m.startsIn : 'Starting...';
   const list = $('lobby-players');
   list.textContent = '';
   let meMarked = false;

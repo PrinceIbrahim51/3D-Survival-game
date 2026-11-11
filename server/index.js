@@ -41,10 +41,10 @@ export function sanitizeName(raw) {
 
 export function createServer(options = {}) {
   const env = options.env ?? process.env;
-  const maxPlayers = Math.max(1, Math.min(32, num(env.MAX_PLAYERS, 16)));
+  const maxPlayers = Math.max(2, Math.min(32, num(env.MAX_PLAYERS, 16)));
   const matchmaker = new Matchmaker({
     maxPlayers,
-    fillTo: Math.max(1, Math.min(maxPlayers, num(env.BOT_FILL, 12))),
+    fillTo: Math.max(2, Math.min(maxPlayers, num(env.BOT_FILL, 12))),
     lobbySeconds: num(env.LOBBY_SECONDS, 20),
     zoneScale: num(env.ZONE_SCALE, 1),
     bots: env.BOTS !== '0',

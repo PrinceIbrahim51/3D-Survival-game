@@ -654,7 +654,7 @@ export class Game {
       py = this.pos.y;
       pz = this.pos.z;
       eyeTarget = s.crouch ? CROUCH_EYE_HEIGHT : EYE_HEIGHT;
-      const ads = (input.ads || input.keys.has('ControlRight')) && !s.chute;
+      const ads = input.ads && !s.chute;
       const def = this.activeDef();
       if (s.chute) {
         wantDist = 7.5;
