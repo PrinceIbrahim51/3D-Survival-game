@@ -66,10 +66,11 @@ export class Effects {
     canvas.height = 256;
     const ctx = canvas.getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    // Kept translucent so players can always see through the wall.
     grad.addColorStop(0, 'rgba(120, 90, 255, 0)');
-    grad.addColorStop(0.45, 'rgba(120, 110, 255, 0.28)');
-    grad.addColorStop(0.8, 'rgba(130, 150, 255, 0.7)');
-    grad.addColorStop(1, 'rgba(150, 200, 255, 0.95)');
+    grad.addColorStop(0.45, 'rgba(120, 110, 255, 0.16)');
+    grad.addColorStop(0.8, 'rgba(130, 150, 255, 0.32)');
+    grad.addColorStop(1, 'rgba(150, 200, 255, 0.46)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 64, 256);
     ctx.globalCompositeOperation = 'destination-out';

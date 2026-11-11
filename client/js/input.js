@@ -7,6 +7,13 @@ const MOUSE_SENS = 0.0022;
 const TOUCH_SENS = 0.0052;
 const STICK_RADIUS = 56;
 
+// Keeps receiving move events for a touch that slides off its element.
+function capture(el, pointerId) {
+  try {
+    el.setPointerCapture(pointerId);
+  } catch { /* the pointer is already gone */ }
+}
+
 export class Input {
   constructor(canvas, settings) {
     this.canvas = canvas;
@@ -28,6 +35,8 @@ export class Input {
     this.reloadUntil = 0;
     this.mouseDown = false;
     this.locked = false;
+    this.spectating = false; // dead: cursor stays free, drag to look around
+    this.paused = false; // settings overlay open: the character stands still
     this.stick = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
     this.look = { id: null, x: 0, y: 0 };
 
@@ -57,6 +66,10 @@ export class Input {
       if (!this.enabled) return;
       if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
+      if (this.paused) {
+        if (e.code === 'Escape') this.act('resume');
+        return;
+      }
       this.keys.add(e.code);
       switch (e.code) {
         case 'Digit1': this.act('slot', { n: 0 }); break;
@@ -70,6 +83,8 @@ export class Input {
         case 'KeyG': this.act('drop'); break;
         case 'KeyM': case 'Tab': this.act('map'); break;
         case 'KeyC': this.crouch = !this.crouch; break;
+        case 'KeyN': this.act('next'); break;
+        case 'Space': if (this.spectating) this.act('next'); break;
         case 'KeyR': this.reloadUntil = performance.now() + 150; break;
         case 'Escape': this.act('pause'); break;
         default:
@@ -86,20 +101,16 @@ export class Input {
   bindMouse() {
     const c = this.canvas;
     c.addEventListener('mousedown', (e) => {
-      if (!this.enabled || this.touch) return;
-      if (!this.locked && c.requestPointerLock) {
-        const p = c.requestPointerLock();
-        if (p && p.catch) p.catch(() => {});
-      }
+      if (!this.enabled || this.touch || this.paused) return;
       this.mouseDown = true;
+      if (this.spectating) return;
+      this.lock();
       if (e.button === 0) this.fire = true;
       if (e.button === 2) this.ads = true;
     });
     window.addEventListener('mouseup', (e) => {
-      if (e.button === 0) {
-        this.fire = false;
-        this.mouseDown = false;
-      }
+      this.mouseDown = false;
+      if (e.button === 0) this.fire = false;
       if (e.button === 2) this.ads = false;
     });
     window.addEventListener('mousemove', (e) => {
@@ -123,7 +134,7 @@ export class Input {
   }
 
   lock() {
-    if (this.touch || !this.canvas.requestPointerLock) return;
+    if (this.touch || this.spectating || this.paused || this.locked || !this.canvas.requestPointerLock) return;
     const p = this.canvas.requestPointerLock();
     if (p && p.catch) p.catch(() => {});
   }
@@ -142,7 +153,7 @@ export class Input {
     };
     zone.addEventListener('pointerdown', (e) => {
       if (this.stick.id !== null) return;
-      zone.setPointerCapture(e.pointerId);
+      capture(zone, e.pointerId);
       this.stick.id = e.pointerId;
       this.stick.ox = e.clientX;
       this.stick.oy = e.clientY;
@@ -182,7 +193,7 @@ export class Input {
     const lookPad = (el, onDown, onUp) => {
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
-        el.setPointerCapture(e.pointerId);
+        capture(el, e.pointerId);
         el._pid = e.pointerId;
         el._x = e.clientX;
         el._y = e.clientY;
@@ -233,6 +244,8 @@ export class Input {
   reset(yaw = 0) {
     this.yaw = yaw;
     this.pitch = -0.2;
+    this.spectating = false;
+    this.paused = false;
     this.fire = false;
     this.ads = false;
     this.crouch = false;
@@ -251,6 +264,11 @@ export class Input {
     let mx = 0;
     let mz = 0;
     const k = this.keys;
+    if (this.paused) {
+      this.mx = 0;
+      this.mz = 0;
+      return this.crouch ? BTN.CROUCH : 0;
+    }
     if (k.has('KeyW') || k.has('ArrowUp')) mz += 1;
     if (k.has('KeyS') || k.has('ArrowDown')) mz -= 1;
     if (k.has('KeyD') || k.has('ArrowRight')) mx += 1;

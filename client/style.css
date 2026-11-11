@@ -149,7 +149,7 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 }
 
 /* ---------------------------------------------------------------- HUD */
-#hud { position: fixed; inset: 0; z-index: 10; pointer-events: none; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
+#hud { position: fixed; inset: 0; z-index: 12; pointer-events: none; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
 #hud button { pointer-events: auto; text-shadow: none; }
 
 #vignette, #zonewarn, #scope { position: absolute; inset: 0; opacity: 0; transition: opacity 0.25s; }
@@ -242,10 +242,13 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 #spectate { position: absolute; left: 50%; bottom: calc(18px + var(--safe-b)); transform: translateX(-50%); display: flex; gap: 10px; align-items: center; background: rgba(13, 27, 36, 0.75); border-radius: 12px; padding: 8px 12px; font-size: 14px; white-space: nowrap; }
 #spectate b { color: var(--accent); }
 #spectate button { padding: 6px 10px; font-size: 13px; }
+#spectate button small { display: inline; opacity: 0.6; margin: 0 0 0 4px; }
+body.touch #spectate button small { display: none; }
 #pausebtn { position: absolute; left: calc(12px + var(--safe-l)); bottom: calc(12px + var(--safe-b)); padding: 6px 12px; font-size: 13px; opacity: 0.8; display: none; }
 
 /* -------------------------------------------------------- touch layer */
-#touch { position: fixed; inset: 0; z-index: 12; }
+/* Sits under the HUD so HUD buttons (map, weapons, items) stay tappable. */
+#touch { position: fixed; inset: 0; z-index: 10; }
 #stickzone { position: absolute; left: 0; top: 22%; bottom: 0; width: 42%; }
 #lookzone { position: absolute; right: 0; top: 0; bottom: 0; width: 58%; }
 #stick { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; left: calc(90px + var(--safe-l)); bottom: calc(30px + var(--safe-b)); top: auto; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35); background: rgba(255, 255, 255, 0.06); pointer-events: none; }
@@ -253,27 +256,28 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 #stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(255, 255, 255, 0.45); }
 .tbtn { position: absolute; border-radius: 50%; width: 62px; height: 62px; padding: 0; font-size: 11px; background: rgba(13, 27, 36, 0.5); border: 2px solid rgba(255, 255, 255, 0.4); color: #fff; }
 .tbtn.on { background: rgba(255, 155, 33, 0.6); }
-#t-fire { right: calc(26px + var(--safe-r)); bottom: calc(96px + var(--safe-b)); width: 84px; height: 84px; font-size: 13px; background: rgba(200, 60, 40, 0.5); }
-#t-fire2 { left: calc(20px + var(--safe-l)); top: 24%; width: 60px; height: 60px; background: rgba(200, 60, 40, 0.35); }
-#t-ads { right: calc(122px + var(--safe-r)); bottom: calc(120px + var(--safe-b)); }
-#t-jump { right: calc(20px + var(--safe-r)); bottom: calc(194px + var(--safe-b)); }
-#t-crouch { right: calc(98px + var(--safe-r)); bottom: calc(196px + var(--safe-b)); width: 56px; height: 56px; font-size: 10px; }
-#t-reload { right: calc(190px + var(--safe-r)); bottom: calc(86px + var(--safe-b)); width: 56px; height: 56px; font-size: 10px; }
+#t-fire { right: calc(24px + var(--safe-r)); bottom: calc(58px + var(--safe-b)); width: 80px; height: 80px; font-size: 13px; background: rgba(200, 60, 40, 0.5); }
+#t-fire2 { left: calc(20px + var(--safe-l)); top: 26%; width: 56px; height: 56px; background: rgba(200, 60, 40, 0.35); }
+#t-ads { right: calc(116px + var(--safe-r)); bottom: calc(92px + var(--safe-b)); width: 58px; height: 58px; }
+#t-jump { right: calc(18px + var(--safe-r)); bottom: calc(150px + var(--safe-b)); width: 56px; height: 56px; }
+#t-crouch { right: calc(88px + var(--safe-r)); bottom: calc(160px + var(--safe-b)); width: 50px; height: 50px; font-size: 9px; }
+#t-reload { right: calc(120px + var(--safe-r)); bottom: calc(26px + var(--safe-b)); width: 52px; height: 52px; font-size: 9px; }
 #t-pickup { left: 50%; top: 52%; margin-left: 96px; width: 66px; height: 66px; background: rgba(255, 155, 33, 0.75); color: #23160a; border-color: #fff; }
 
-/* Touch devices: compact HUD that leaves room for thumbs. */
-body.touch #pausebtn { display: block; left: auto; right: calc(214px + var(--safe-r)); top: calc(10px + var(--safe-t)); bottom: auto; }
-body.touch #minimap { width: 120px; height: 120px; }
+/* Compact HUD for phones and small windows; leaves room for thumbs. */
+body.touch #pausebtn { display: block; left: auto; right: calc(126px + var(--safe-r)); top: calc(10px + var(--safe-t)); bottom: auto; }
+body.compact #minimap { width: 104px; height: 104px; }
 body.touch #maphint { display: none; }
-body.touch #weapons { flex-direction: row; right: auto; left: 50%; transform: translateX(-50%); bottom: calc(70px + var(--safe-b)); }
-body.touch .slot { min-width: 0; padding: 6px 9px; font-size: 12px; grid-template-columns: 1fr auto; }
+body.compact #weapons { flex-direction: row; right: auto; left: 50%; transform: translateX(-50%); bottom: calc(70px + var(--safe-b)); }
+body.compact .slot { min-width: 0; padding: 6px 9px; font-size: 12px; }
+body.touch .slot { grid-template-columns: 1fr auto; }
 body.touch .slot b, body.touch .item b { display: none; }
-body.touch .slot.active .wammo { font-size: 15px; }
-body.touch #bottom { width: min(300px, 40vw); bottom: calc(8px + var(--safe-b)); }
-body.touch #prompt { top: 54%; }
-body.touch #counters .small { display: none; }
-body.touch #killfeed { font-size: 11px; max-width: 34vw; }
-body.touch #zoneinfo { font-size: 12px; min-width: 150px; padding: 4px 10px 6px; }
+body.compact .slot.active .wammo { font-size: 15px; }
+body.compact #bottom { width: min(300px, 40vw); bottom: calc(8px + var(--safe-b)); }
+body.compact #prompt { top: 54%; }
+body.compact #counters .small { display: none; }
+body.compact #killfeed { font-size: 11px; max-width: 34vw; }
+body.compact #zoneinfo { font-size: 12px; min-width: 150px; padding: 4px 10px 6px; }
 
 @media (max-height: 430px) {
   .panel { padding: 16px; }

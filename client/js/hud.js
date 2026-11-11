@@ -111,14 +111,15 @@ export class Hud {
     const feed = $('killfeed');
     const row = document.createElement('div');
     if (mine) row.classList.add('mine');
+    const i = document.createElement('i');
+    i.textContent = cause;
     if (killer) {
       const b = document.createElement('b');
       b.textContent = killer;
-      row.append(b, ' ');
+      row.append(b, ' ', i, ' ', victim);
+    } else {
+      row.append(victim, ' ', i);
     }
-    const i = document.createElement('i');
-    i.textContent = cause;
-    row.append(i, ' ', victim);
     feed.append(row);
     while (feed.children.length > 5) feed.firstChild.remove();
     setTimeout(() => row.remove(), 6200);
@@ -175,9 +176,12 @@ export class Hud {
     if (pick) pick.classList.toggle('hidden', !text);
     if (!text) return;
     el.textContent = '';
-    const b = document.createElement('b');
-    b.textContent = key;
-    el.append(b, text);
+    if (key) {
+      const b = document.createElement('b');
+      b.textContent = key;
+      el.append(b);
+    }
+    el.append(text);
   }
 
   startProgress(text, seconds) {

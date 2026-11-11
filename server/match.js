@@ -366,7 +366,7 @@ export class Match {
   onInput(client, list) {
     const p = client.player;
     if (!p || !p.alive || this.state !== 'playing' || !Array.isArray(list)) return;
-    for (let i = 0; i < list.length && i < 12; i++) {
+    for (let i = 0; i < list.length && i < 20; i++) {
       const a = list[i];
       if (!Array.isArray(a)) continue;
       const seq = a[0] | 0;
@@ -653,7 +653,8 @@ export class Match {
       // keep physics running so nobody hangs in mid-air.
       if (p.alive && p.queue.length === 0 && p.budget >= 0.4) {
         p.budget -= TICK_DT;
-        this.applyInput(p, { mx: 0, mz: 0, yaw: p.yaw, pitch: p.pitch, b: 0 }, TICK_DT);
+        // The player keeps their stance but does not walk or shoot on their own.
+        this.applyInput(p, { mx: 0, mz: 0, yaw: p.yaw, pitch: p.pitch, b: p.btn & BTN.CROUCH }, TICK_DT);
       }
     }
 

@@ -305,6 +305,9 @@ export class Game {
     this.hud.killFeed(killer, victim, causeText(cause), mine);
     if (victimId === this.myId) {
       this.alive = false;
+      this.input.spectating = true;
+      this.input.fire = false;
+      this.input.unlock();
       this.me.dead = 0.001;
       this.lastDeathPos.copy(this.pos);
       this.spectateId = killerId || 0;
@@ -436,6 +439,8 @@ export class Game {
       switch (act.a) {
         case 'map': this.hud.toggleMap(); break;
         case 'pause': this.app.showPause(true); break;
+        case 'resume': this.app.showPause(false); break;
+        case 'next': if (!this.alive) this.nextSpectate(); break;
         default:
           if (this.alive && this.st) this.doGameAction(act);
       }
@@ -515,12 +520,13 @@ export class Game {
     if (this.alive && !this.ended) {
       this.acc += dt;
       let n = 0;
-      while (this.acc >= INPUT_DT && n < 6) {
+      // Catch up after a slow frame so low frame rates do not slow the player down.
+      while (this.acc >= INPUT_DT && n < 15) {
         this.acc -= INPUT_DT;
         this.tickInput();
         n++;
       }
-      if (this.acc > INPUT_DT * 6) this.acc = 0;
+      if (this.acc > INPUT_DT * 15) this.acc = 0;
       if (this.outbox.length) {
         this.net.send({ t: 'i', a: this.outbox });
         this.outbox = [];
@@ -530,8 +536,8 @@ export class Game {
       const p = this.prev;
       this.corr.multiplyScalar(Math.exp(-dt * 12));
       this.pos.set(p.x + (s.x - p.x) * a + this.corr.x, p.y + (s.y - p.y) * a + this.corr.y, p.z + (s.z - p.z) * a + this.corr.z);
-    } else if (!this.alive) {
-      // Dead: clicking cycles the spectated player.
+    } else if (!this.alive && this.input.touch) {
+      // Dead on a phone: the fire button cycles the spectated player.
       const down = this.input.fire;
       if (down && !this.fireWasDown) this.nextSpectate();
       this.fireWasDown = down;
@@ -782,7 +788,7 @@ export class Game {
       }
       if (it && performance.now() - this.promptSince > 250) {
         const full = this.st.w[0] && this.st.w[1];
-        hud.setPrompt((full ? 'Swap for ' : 'Pick up ') + ITEMS[it.kind].name);
+        hud.setPrompt((full ? 'Swap for ' : 'Pick up ') + ITEMS[it.kind].name, this.input.touch ? null : 'F');
       } else {
         hud.setPrompt(null);
       }

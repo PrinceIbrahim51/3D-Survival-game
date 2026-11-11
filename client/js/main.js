@@ -30,7 +30,8 @@ function saveSettings() {
 const canvas = $('view');
 const quality = ['low', 'medium', 'high'].includes(settings.quality) ? settings.quality : 'medium';
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low', powerPreference: 'high-performance' });
-const pixelRatio = () => Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1 : quality === 'medium' ? 1.5 : 2);
+// Low keeps phones fast: no shadows, no anti-aliasing, and a capped resolution.
+const pixelRatio = () => Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1.5 : 2);
 renderer.setPixelRatio(pixelRatio());
 renderer.shadowMap.enabled = quality !== 'low';
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -46,6 +47,7 @@ scene.add(worldView.group);
 function resize() {
   const w = window.innerWidth;
   const h = window.innerHeight;
+  document.body.classList.toggle('compact', isTouch || w < 900 || h < 560);
   renderer.setPixelRatio(pixelRatio());
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
@@ -80,6 +82,7 @@ function setScreen(name) {
   $('result').classList.toggle('hidden', name !== 'result');
   $('death').classList.add('hidden');
   $('pause').classList.add('hidden');
+  input.paused = false;
   $('banner').classList.add('hidden');
   const playing = name === 'game';
   hud.show(playing);
@@ -111,8 +114,15 @@ function showPause(on) {
   if (app.screen !== 'game') return;
   if (on && !$('death').classList.contains('hidden')) return;
   $('pause').classList.toggle('hidden', !on);
-  if (on) input.unlock();
-  else input.lock();
+  input.paused = on;
+  if (on) {
+    input.fire = false;
+    input.ads = false;
+    input.keys.clear();
+    input.unlock();
+  } else {
+    input.lock();
+  }
 }
 
 function join(mode) {
@@ -164,7 +174,6 @@ $('lobby-ready').addEventListener('click', () => {
 $('lobby-leave').addEventListener('click', leaveMatch);
 $('death-spectate').addEventListener('click', () => {
   $('death').classList.add('hidden');
-  input.lock();
 });
 $('death-leave').addEventListener('click', leaveMatch);
 $('result-again').addEventListener('click', () => join(app.mode));
@@ -257,7 +266,7 @@ net.on('start', (m) => {
   app.mode = m.mode || app.mode;
   setScreen('game');
   app.game = new Game(app, m);
-  if (!isTouch) hud.announce('Click to capture the mouse. Steer your parachute with WASD', 5000);
+  if (!isTouch && !input.locked) hud.announce('Click to look around. Steer your parachute with WASD', 5000);
 });
 
 net.on('s', (m) => {
@@ -274,6 +283,7 @@ net.on('dead', (m) => {
   $('death-by').textContent = m.killer ? `${m.killer} got you ${causeText(m.cause)}` : m.cause === 'zone' ? 'The zone got you.' : 'You are out.';
   $('death-stats').textContent = `${m.kills} kill${m.kills === 1 ? '' : 's'}  -  ${m.damage} damage dealt`;
   $('pause').classList.add('hidden');
+  input.paused = false;
   hud.toggleMap(false);
   $('death').classList.remove('hidden');
   input.unlock();
@@ -286,6 +296,7 @@ net.on('end', (m) => {
   const won = m.you && m.you.place === 1;
   $('death').classList.add('hidden');
   $('pause').classList.add('hidden');
+  input.paused = false;
   input.unlock();
   const banner = $('banner');
   banner.querySelector('h1').textContent = won ? 'VICTORY' : 'MATCH OVER';
@@ -331,7 +342,7 @@ let last = performance.now();
 let menuAngle = 0.6;
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
   if (app.game) {
     app.game.frame(dt);
