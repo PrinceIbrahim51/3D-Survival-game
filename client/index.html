@@ -1,1 +1,188 @@
-<!doctype html><title>Project Last Stand</title>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1b24">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Project Last Stand</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%230d1b24'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23ff9b21' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23ff9b21'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+    { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <!-- ===================== in-game HUD ===================== -->
+  <div id="hud" class="hidden">
+    <div id="vignette"></div>
+    <div id="zonewarn"></div>
+    <div id="scope"></div>
+
+    <div id="topleft">
+      <div id="counters">
+        <div class="counter"><span id="alive">0</span><label>ALIVE</label></div>
+        <div class="counter"><span id="kills">0</span><label>KILLS</label></div>
+        <div class="counter small"><span id="ping">--</span><label>PING</label></div>
+      </div>
+      <div id="killfeed"></div>
+    </div>
+
+    <div id="zoneinfo"><span id="zonetext"></span><div id="zonebar"><i></i></div></div>
+    <div id="announce"></div>
+
+    <div id="mapwrap">
+      <canvas id="minimap" width="220" height="220"></canvas>
+      <div id="maphint">M</div>
+    </div>
+
+    <div id="crosshair"><i></i><i></i><i></i><i></i><b></b></div>
+    <div id="hitmarker"></div>
+    <div id="dmgdir"></div>
+    <div id="prompt" class="hidden"></div>
+    <div id="pickuplog"></div>
+
+    <div id="bottom">
+      <div id="progress" class="hidden"><span id="progresstext"></span><div><i></i></div></div>
+      <div id="vitals">
+        <div class="bar armor"><i id="armorbar"></i><span id="armortext"></span></div>
+        <div class="bar health"><i id="hpbar"></i><span id="hptext">100</span></div>
+      </div>
+      <div id="belt">
+        <button class="item" id="btn-bandage" data-heal="bandage"><b>4</b><span>Bandage</span><em id="n-bandage">0</em></button>
+        <button class="item" id="btn-medkit" data-heal="medkit"><b>5</b><span>Med Kit</span><em id="n-medkit">0</em></button>
+        <div class="item passive" id="packinfo"><span>Pack</span><em id="n-pack">-</em></div>
+      </div>
+    </div>
+
+    <div id="weapons">
+      <button class="slot" data-slot="0"><b>1</b><span class="wname">Empty</span><em class="wammo"></em></button>
+      <button class="slot" data-slot="1"><b>2</b><span class="wname">Empty</span><em class="wammo"></em></button>
+      <button class="slot" data-slot="2"><b>3</b><span class="wname">Fists</span><em class="wammo"></em></button>
+    </div>
+
+    <div id="spectate" class="hidden">
+      <span>Spectating <b id="specname"></b></span>
+      <button id="specnext">Next player</button>
+      <button id="specleave">Leave match</button>
+    </div>
+
+    <button id="pausebtn" aria-label="Menu">II</button>
+  </div>
+
+  <!-- ===================== touch controls ===================== -->
+  <div id="touch" class="hidden">
+    <div id="stickzone"><div id="stick"><i></i></div></div>
+    <div id="lookzone"></div>
+    <button class="tbtn" id="t-fire">FIRE</button>
+    <button class="tbtn" id="t-fire2">FIRE</button>
+    <button class="tbtn" id="t-ads">AIM</button>
+    <button class="tbtn" id="t-jump">JUMP</button>
+    <button class="tbtn" id="t-crouch">CROUCH</button>
+    <button class="tbtn" id="t-reload">RELOAD</button>
+    <button class="tbtn hidden" id="t-pickup">TAKE</button>
+  </div>
+
+  <div id="bigmap" class="hidden"><canvas id="bigmapcanvas" width="720" height="720"></canvas><p>Tap or press M to close</p></div>
+
+  <!-- ===================== menu ===================== -->
+  <div id="menu" class="screen">
+    <div class="panel">
+      <h1>PROJECT <span>LAST STAND</span></h1>
+      <p class="tag">Drop in. Gear up. Outlast everyone on Aindinai Island.</p>
+      <label class="field">Player name
+        <input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Enter a name">
+      </label>
+      <div class="buttons">
+        <button id="play-quick" class="primary">Quick Match<small>Join other players, bots fill empty seats</small></button>
+        <button id="play-practice">Practice<small>Start right away against bots</small></button>
+      </div>
+      <div class="room">
+        <input id="room" maxlength="12" autocomplete="off" spellcheck="false" placeholder="Room code">
+        <button id="play-room">Private Room</button>
+      </div>
+      <p id="menu-error" class="error"></p>
+      <p id="conn" class="conn">Connecting to server...</p>
+      <details>
+        <summary>Controls</summary>
+        <div class="controls">
+          <div><b>WASD</b> move</div><div><b>Mouse</b> look</div>
+          <div><b>Left click</b> fire</div><div><b>Right click</b> aim</div>
+          <div><b>Shift</b> sprint</div><div><b>Space</b> jump</div>
+          <div><b>C</b> crouch</div><div><b>R</b> reload</div>
+          <div><b>1 2 3</b> weapons</div><div><b>F</b> pick up / swap</div>
+          <div><b>4</b> bandage <b>5</b> med kit</div><div><b>G</b> drop weapon</div>
+          <div><b>M</b> map</div><div><b>Esc</b> menu</div>
+          <div class="wide">On phones and tablets: left thumb moves, right thumb looks, on-screen buttons do the rest.</div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ===================== lobby ===================== -->
+  <div id="lobby" class="screen hidden">
+    <div class="panel">
+      <h2 id="lobby-title">Lobby</h2>
+      <p id="lobby-sub" class="tag"></p>
+      <div id="lobby-count" class="countdown"></div>
+      <ul id="lobby-players"></ul>
+      <div class="buttons row">
+        <button id="lobby-ready" class="primary">Ready</button>
+        <button id="lobby-leave">Leave</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== eliminated ===================== -->
+  <div id="death" class="overlay hidden">
+    <div class="panel narrow">
+      <h2 class="bad">ELIMINATED</h2>
+      <p id="death-place" class="place"></p>
+      <p id="death-by" class="tag"></p>
+      <p id="death-stats" class="tag"></p>
+      <div class="buttons row">
+        <button id="death-spectate" class="primary">Spectate</button>
+        <button id="death-leave">Leave</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== result ===================== -->
+  <div id="result" class="screen hidden">
+    <div class="panel">
+      <h2 id="result-title"></h2>
+      <p id="result-sub" class="tag"></p>
+      <table id="result-table"><thead><tr><th>#</th><th>Player</th><th>Kills</th><th>Damage</th></tr></thead><tbody></tbody></table>
+      <div class="buttons row">
+        <button id="result-again" class="primary">Play again</button>
+        <button id="result-menu">Main menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== pause / settings ===================== -->
+  <div id="pause" class="overlay hidden">
+    <div class="panel narrow">
+      <h2>Settings</h2>
+      <label class="field">Look sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
+      <label class="field">Sound volume <input id="set-vol" type="range" min="0" max="1" step="0.05"></label>
+      <label class="field">Graphics
+        <select id="set-quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+      </label>
+      <label class="check"><input id="set-invert" type="checkbox"> Invert vertical look</label>
+      <div class="buttons row">
+        <button id="pause-resume" class="primary">Resume</button>
+        <button id="pause-leave">Leave match</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="banner" class="hidden"><h1></h1><p></p></div>
+  <div id="rotate">Rotate your device to landscape to play</div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

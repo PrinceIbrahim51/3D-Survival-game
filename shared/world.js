@@ -307,7 +307,7 @@ export function generateWorld(seed = WORLD_SEED) {
         if (alongX) addBox(x0 - ov, ya, cz - half, x1 + ov, ya + 0.4, cz + half, 'roofstep', roofC, 0);
         else addBox(cx - half, ya, z0 - ov, cx + half, ya + 0.4, z1 + ov, 'roofstep', roofC, 0);
       }
-      decor.push({ t: 'gable', x0: x0 - ov, z0: z0 - ov, x1: x1 + ov, z1: z1 + ov, y: ry + 0.25, h: 1.6, ax: alongX ? 'x' : 'z', c: roofC });
+      decor.push({ t: 'gable', x0: x0 - ov, z0: z0 - ov, x1: x1 + ov, z1: z1 + ov, y: ry + 0.25, h: 1.6, ax: alongX ? 'x' : 'z', c: roofC, wc: wallC });
     } else {
       addBox(x0 - 0.15, ry, z0 - 0.15, x1 + 0.15, ry + 0.25, z1 + 0.15, 'roof', roofC);
       if (o.stairs) {

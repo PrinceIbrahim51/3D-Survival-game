@@ -51,6 +51,8 @@ export function createServer(options = {}) {
     ...options.matchmaking,
   });
 
+  const debugSpawn = env.DEBUG_SPAWN === '1'; // never enable on a public server
+
   const server = http.createServer((req, res) => {
     let pathname;
     try {
@@ -146,6 +148,7 @@ export function createServer(options = {}) {
           break;
         case 'join': {
           client.name = sanitizeName(msg.name);
+          client.debugSpawn = debugSpawn && Array.isArray(msg.spawn) && msg.spawn.slice(0, 3).every(Number.isFinite) ? msg.spawn.slice(0, 3) : null;
           const err = matchmaker.join(client, msg);
           if (err) client.send({ t: 'error', msg: err });
           break;

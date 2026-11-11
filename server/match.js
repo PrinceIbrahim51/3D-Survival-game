@@ -222,6 +222,17 @@ export class Match {
       p.s.chute = true;
       // Face the middle of the island.
       p.yaw = Math.atan2(sp.x, sp.z);
+      // Development aid (server started with DEBUG_SPAWN=1): put a human
+      // straight on the ground at a requested spot.
+      const dbg = !p.bot && p.client.debugSpawn;
+      if (dbg) {
+        p.s.x = dbg[0];
+        p.s.z = dbg[1];
+        p.s.y = floorAt(this.world, dbg[0], dbg[1], 500);
+        p.s.vy = 0;
+        p.s.chute = false;
+        p.yaw = dbg[2] || 0;
+      }
       if (p.bot) p.ai = new Bot(this, p);
     }
 
