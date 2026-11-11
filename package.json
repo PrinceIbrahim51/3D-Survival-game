@@ -1,0 +1,19 @@
+{
+  "name": "project-last-stand",
+  "version": "0.1.0",
+  "description": "Project Last Stand - an original browser-based 3D battle royale survival shooter with an authoritative Node.js server.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "three": "^0.170.0",
+    "ws": "^8.18.0"
+  }
+}
