@@ -59,6 +59,10 @@ test('HTTP serves the client and refuses to leave its folders', async () => {
     assert.equal(self.ok, true, JSON.stringify(self));
     assert.equal(self.sameInstance, true);
     assert.deepEqual(self.steps.slice(0, 2), ['hello', 'lobby']);
+    const full = await (await fetch(base + '/api/ws?selftest=full')).json();
+    assert.equal(full.ok, true, JSON.stringify(full));
+    assert.deepEqual(full.steps, ['hello', 'lobby', 'start', 'input', 'handover', 'snapshots-continue']);
+    assert.equal(full.secondSocketSameInstance, true);
     for (const bad of ['/../package.json', '/shared/../package.json', '/%2e%2e/package.json', '/shared/%2e%2e%2fserver/index.js', '/server/index.js']) {
       const res = await fetch(base + bad);
       assert.equal(res.status, 404, bad);

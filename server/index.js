@@ -7,11 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import WebSocket, { WebSocketServer } from 'ws';
+import { WebSocketServer } from 'ws';
 import { TICK_MS } from '../shared/constants.js';
 import { getWorld } from '../shared/world.js';
 import { getNav } from './nav.js';
 import { Matchmaker } from './matchmaker.js';
+import { runSelfTest } from './selftest.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATIC = [
@@ -53,6 +54,9 @@ export function createServer(options = {}) {
   });
 
   const debugSpawn = env.DEBUG_SPAWN === '1'; // never enable on a public server
+  // STATIC_DIR serves one pre-built folder (the output of `npm run build`)
+  // instead of the source folders.
+  const staticDirs = env.STATIC_DIR ? [['/', path.resolve(ROOT, env.STATIC_DIR)]] : STATIC;
   // A disconnected player keeps their seat this long so they can rejoin.
   const resumeGraceMs = num(env.RESUME_GRACE, 20) * 1000;
   // Hosts that cut long connections (serverless functions) set CONN_TTL so
@@ -61,45 +65,12 @@ export function createServer(options = {}) {
   const instanceId = crypto.randomBytes(4).toString('hex');
   const sessions = new Map(); // session id -> client
 
-  // Opens a WebSocket to our own public address and plays the first few
-  // protocol steps. Lets a deployment be verified with a plain HTTP request.
-  function selfTest(req) {
-    return new Promise((resolve) => {
-      const proto = String(req.headers['x-forwarded-proto'] || '').includes('https') ? 'wss' : 'ws';
-      const url = `${proto}://${req.headers.host}/api/ws`;
-      const t0 = Date.now();
-      const steps = [];
-      let done = false;
-      const finish = (ok, extra) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        try {
-          sock.close();
-        } catch { /* already closed */ }
-        resolve({ ok, url, ms: Date.now() - t0, steps, instance: instanceId, ...extra });
-      };
-      const sock = new WebSocket(url);
-      const timer = setTimeout(() => finish(false, { error: 'timed out' }), 9000);
-      sock.on('error', (err) => finish(false, { error: String(err.message || err) }));
-      sock.on('unexpected-response', (_r, res) => finish(false, { error: 'HTTP ' + res.statusCode + ' instead of a WebSocket upgrade' }));
-      sock.on('message', (data) => {
-        let m;
-        try {
-          m = JSON.parse(data.toString());
-        } catch {
-          return;
-        }
-        steps.push(m.t);
-        if (m.t === 'hello') {
-          sock.send(JSON.stringify({ t: 'join', name: 'selftest', mode: 'practice' }));
-          sock.helloInst = m.inst;
-        } else if (m.t === 'lobby') {
-          sock.send(JSON.stringify({ t: 'leave' }));
-          finish(true, { sameInstance: sock.helloInst === instanceId, lobbyPlayers: m.players.length });
-        }
-      });
-    });
+  // Tests this server through its own public address. Lets a deployment be
+  // verified with a plain HTTP request: GET /api/ws?selftest=1 (or =full).
+  async function selfTest(req, full) {
+    const proto = String(req.headers['x-forwarded-proto'] || '').includes('https') ? 'wss' : 'ws';
+    const result = await runSelfTest(`${proto}://${req.headers.host}/api/ws`, { full });
+    return { ...result, servedBy: instanceId, sameInstance: result.instance === instanceId };
   }
 
   const server = http.createServer((req, res) => {
@@ -117,7 +88,7 @@ export function createServer(options = {}) {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(body));
       };
-      if (url.searchParams.has('selftest')) selfTest(req).then(reply);
+      if (url.searchParams.has('selftest')) selfTest(req, url.searchParams.get('selftest') === 'full').then(reply);
       else reply({ ok: true, instance: instanceId, sessions: sessions.size, ...matchmaker.stats() });
       return;
     }
@@ -126,7 +97,7 @@ export function createServer(options = {}) {
       return;
     }
     if (pathname === '/') pathname = '/index.html';
-    for (const [prefix, dir] of STATIC) {
+    for (const [prefix, dir] of staticDirs) {
       if (!pathname.startsWith(prefix)) continue;
       const file = path.join(dir, pathname.slice(prefix.length));
       // Never serve anything outside the mapped directory.
