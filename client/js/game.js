@@ -3,7 +3,7 @@
 // The server stays authoritative for every gameplay result.
 
 import * as THREE from 'three';
-import { stepPlayer, makeMoveState, copyMoveState, raycastWorld, rayPlayer } from '/shared/physics.js';
+import { stepPlayer, makeMoveState, copyMoveState, raycastWorld, rayPlayer, isSwimming } from '/shared/physics.js';
 import {
   BTN, PF, INPUT_DT, INTERP_DELAY_MS, INTERACT_RADIUS, WALK_SPEED, EYE_HEIGHT, CROUCH_EYE_HEIGHT, dirFromAngles,
 } from '/shared/constants.js';
@@ -579,7 +579,7 @@ export class Game {
       view.setWeapon(armed ? WEAPON_KINDS.indexOf(st.w[st.s][0]) : -1);
       view.update(dt, {
         speed: Math.sqrt(s.vx * s.vx + s.vz * s.vz), pitch: this.input.pitch, crouch: s.crouch, chute: s.chute,
-        ground: s.ground, armed, reloading: !!(st && st.rl),
+        ground: s.ground, armed, reloading: !!(st && st.rl), swim: isSwimming(this.world, s),
       });
       view.root.visible = !this.scoped;
     } else if (view.dead > 0) {
@@ -626,7 +626,7 @@ export class Game {
       view.setWeapon(b.w);
       view.update(dt, {
         speed: r.speed, pitch: a.pitch + (b.pitch - a.pitch) * k, crouch: r.crouch, chute: r.chute,
-        ground: (f & PF.GROUND) !== 0, armed: b.w >= 0, reloading: (f & PF.RELOAD) !== 0,
+        ground: (f & PF.GROUND) !== 0, armed: b.w >= 0, reloading: (f & PF.RELOAD) !== 0, swim: isSwimming(this.world, r),
       });
       if ((f & PF.GROUND) && r.speed > 3.4 && !r.crouch) {
         r.stepDist += r.speed * dt;

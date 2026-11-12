@@ -6,6 +6,7 @@ import {
   BTN, PLAYER_RADIUS, PLAYER_HEIGHT, CROUCH_HEIGHT, STEP_HEIGHT, GRAVITY, JUMP_SPEED,
   WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SWIM_SPEED, GROUND_ACCEL, AIR_ACCEL,
   CHUTE_SPEED, CHUTE_ACCEL, CHUTE_FALL, SEA_LEVEL, SWIM_DEPTH, WORLD_HALF, WORLD_MARGIN,
+  MANTLE_REACH, MANTLE_SPEED,
 } from './constants.js';
 
 export function makeMoveState(x = 0, y = 0, z = 0) {
@@ -115,6 +116,7 @@ export function stepPlayer(world, s, inp, dt) {
   const hi = s.y + height;
   const R = PLAYER_RADIUS;
   const boxes = world.queryBoxes(nx - R - 0.5, nz - R - 0.5, nx + R + 0.5, nz + R + 0.5, scratch);
+  let ledge = false; // pushing against something low enough to climb
   for (let iter = 0; iter < 3; iter++) {
     let pushed = false;
     for (let i = 0; i < boxes.length; i++) {
@@ -144,8 +146,16 @@ export function stepPlayer(world, s, inp, dt) {
         else nz = bx.z1 + R;
       }
       pushed = true;
+      if (bx.y1 - s.y <= MANTLE_REACH) ledge = true;
     }
     if (!pushed) break;
+  }
+  // Vaulting: holding jump while pressed against a ledge within reach keeps
+  // pulling the player up until they can step onto it. Combined with a jump
+  // this clears crates, rocks and low walls, but not building walls.
+  if (ledge && (b & BTN.JUMP) && !s.chute && !s.crouch && !swimming && s.vy < MANTLE_SPEED) {
+    s.vy = MANTLE_SPEED;
+    s.ground = false;
   }
   const lim = WORLD_HALF - WORLD_MARGIN;
   if (nx < -lim) nx = -lim; else if (nx > lim) nx = lim;

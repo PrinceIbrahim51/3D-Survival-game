@@ -223,14 +223,31 @@ export function createCharacter(id) {
         armL.rotation.set(2.9, 0, 0.25);
         armR.rotation.set(2.9, 0, -0.25);
         body.rotation.x = 0.12;
-        body.position.y = 0;
+        body.position.set(0, 0, 0);
         torso.rotation.x = 0;
         gunPivot.visible = false;
         chute.rotation.z = Math.sin(c.phase * 0.2) * 0.05;
         return;
       }
+      if (st.swim) {
+        // Front crawl: body level at the surface, arms pulling in turn.
+        const stroke = c.phase * 0.55;
+        body.rotation.x = -1.2;
+        body.position.set(0, 1.2, 0.75);
+        torso.rotation.x = 0.25;
+        head.rotation.x = 0.7;
+        armL.rotation.set(2.6 + Math.sin(stroke) * 1.3, 0, 0.3);
+        armR.rotation.set(2.6 - Math.sin(stroke) * 1.3, 0, -0.3);
+        legL.rotation.x = Math.sin(stroke * 2) * 0.35;
+        legR.rotation.x = -Math.sin(stroke * 2) * 0.35;
+        legL.scale.y = 1;
+        legR.scale.y = 1;
+        gunPivot.visible = false;
+        return;
+      }
       gunPivot.visible = true;
       body.rotation.x = 0;
+      body.position.z = 0;
       // Crouch: fold the legs and drop the hips.
       body.position.y = -0.5 * ck;
       legL.rotation.x = swing * (1 - ck * 0.5) + 1.1 * ck;

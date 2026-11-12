@@ -19,6 +19,8 @@ export const CROUCH_HEIGHT = 1.2;
 export const EYE_HEIGHT = 1.6;
 export const CROUCH_EYE_HEIGHT = 1.05;
 export const STEP_HEIGHT = 0.45;
+export const MANTLE_REACH = 1.25; // holding jump against an obstacle whose top is this close pulls you up
+export const MANTLE_SPEED = 5.5;
 
 export const GRAVITY = 22;
 export const JUMP_SPEED = 7;

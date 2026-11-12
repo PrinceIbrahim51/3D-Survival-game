@@ -178,3 +178,36 @@ test('floorAt finds roofs only when the player is above them', () => {
   assert.equal(floorAt(world, x, z, roof.y1 + 1), roof.y1);
   assert.ok(floorAt(world, x, z, roof.y0 - 2.5) < roof.y0);
 });
+
+test('holding jump vaults onto obstacles within reach, but not over tall walls', () => {
+  // A stacked pair of crates is too high for a plain jump.
+  const lower = world.boxes.find((b) => b.k === 'crate' && world.boxes.some((u) => u.k === 'crate' && u !== b && Math.abs(u.y0 - b.y1) < 1e-6 && u.x0 >= b.x0 && u.x1 <= b.x1));
+  assert.ok(lower, 'found stacked crates');
+  const upper = world.boxes.find((u) => u.k === 'crate' && u !== lower && Math.abs(u.y0 - lower.y1) < 1e-6 && u.x0 >= lower.x0 && u.x1 <= lower.x1);
+  const cz = (upper.z0 + upper.z1) / 2;
+  const startX = lower.x0 - 1.2;
+  const ground = world.heightAt(startX, cz);
+  assert.ok(upper.y1 - ground > 1.6 && upper.y1 - ground < 2.3, `stack height ${upper.y1 - ground}`);
+
+  const walker = makeMoveState(startX, ground, cz);
+  walker.ground = true;
+  run(walker, { mx: 0, mz: 1, yaw: -Math.PI / 2, b: 0 }, 2);
+  assert.ok(walker.y < lower.y1 - 0.5, 'walking alone does not get up there');
+
+  const vaulter = makeMoveState(startX, ground, cz);
+  vaulter.ground = true;
+  let top = -Infinity;
+  for (let i = 0; i < 150; i++) {
+    stepPlayer(world, vaulter, { mx: 0, mz: 1, yaw: -Math.PI / 2, b: BTN.JUMP }, INPUT_DT);
+    top = Math.max(top, vaulter.y);
+  }
+  assert.ok(top >= upper.y1 - 1e-6, `vaulted to ${top - ground} m`);
+
+  // The outpost wall (2.7 m) stays out of reach.
+  const wall = world.boxes.find((b) => b.k === 'compound' && b.x1 - b.x0 > 10 && b.z1 - b.z0 < 1);
+  const wx = (wall.x0 + wall.x1) / 2 + 8;
+  const climber = makeMoveState(wx, world.heightAt(wx, wall.z1 + 2), wall.z1 + 2);
+  climber.ground = true;
+  for (let i = 0; i < 240; i++) stepPlayer(world, climber, { mx: 0, mz: 1, yaw: 0, b: BTN.JUMP | BTN.SPRINT }, INPUT_DT);
+  assert.ok(climber.z > wall.z1, 'still on the near side of the wall');
+});
