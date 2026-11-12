@@ -90,6 +90,12 @@ function setScreen(name) {
   document.body.classList.toggle('ingame', playing);
   input.enabled = playing;
   if (!playing) input.unlock();
+  // Hold the connection only while it is needed: in a lobby or a match.
+  const keep = playing || name === 'lobby';
+  net.setKeep(keep);
+  clearTimeout(app.idleTimer);
+  if (!keep) app.idleTimer = setTimeout(() => net.close(), 45000);
+  $('netstatus').classList.add('hidden');
 }
 
 function endGame() {
@@ -125,13 +131,10 @@ function showPause(on) {
   }
 }
 
-function join(mode) {
+async function join(mode) {
   audio.unlock();
   audio.ui('click');
-  if (!net.connected) {
-    $('menu-error').textContent = 'Not connected to the server yet. Please wait a moment.';
-    return;
-  }
+  if (app.joining) return;
   settings.name = $('name').value.trim();
   settings.room = $('room').value.trim().toUpperCase();
   saveSettings();
@@ -141,6 +144,19 @@ function join(mode) {
   }
   $('menu-error').textContent = '';
   app.mode = mode;
+  clearTimeout(app.idleTimer);
+  app.joining = true;
+  $('conn').textContent = 'Connecting to the game server...';
+  try {
+    await net.connect();
+  } catch {
+    $('conn').textContent = '';
+    $('menu-error').textContent = 'Could not reach the game server. Check your connection and try again.';
+    return;
+  } finally {
+    app.joining = false;
+  }
+  $('conn').textContent = '';
   // ?spawn=x,z,yaw only has an effect on servers started with DEBUG_SPAWN=1.
   const dbg = new URLSearchParams(location.search).get('spawn');
   net.send({ t: 'join', name: settings.name, mode, room: settings.room, spawn: dbg ? dbg.split(',').map(Number) : undefined });
@@ -216,14 +232,17 @@ $('set-quality').addEventListener('change', (e) => {
 });
 
 // --------------------------------------------------------------- networking
-net.on('open', () => {
-  $('conn').textContent = 'Connected to server';
-  $('conn').classList.add('ok');
+net.on('reconnecting', () => {
+  $('netstatus').textContent = 'Connection lost. Reconnecting...';
+  $('netstatus').classList.remove('hidden');
 });
-net.on('close', (was) => {
-  $('conn').textContent = 'Connecting to server...';
-  $('conn').classList.remove('ok');
-  if (was && app.screen !== 'menu' && app.screen !== 'result') toMenu('Connection to the server was lost.');
+net.on('reconnected', () => $('netstatus').classList.add('hidden'));
+net.on('lost', () => {
+  if (app.screen !== 'menu' && app.screen !== 'result') toMenu('Connection to the server was lost.');
+});
+// We resumed a session, but its match is over.
+net.on('idle', () => {
+  if (app.screen !== 'menu' && app.screen !== 'result') toMenu('That match has ended.');
 });
 net.on('error', (m) => {
   if (app.screen === 'menu' || app.screen === 'result') {
@@ -262,11 +281,19 @@ net.on('lobby', (m) => {
 });
 
 net.on('start', (m) => {
+  // After a reconnect the match is rebuilt from the server's state, keeping
+  // the direction the player was looking in.
+  const view = m.resume && app.game ? [input.yaw, input.pitch] : null;
   endGame();
   app.mode = m.mode || app.mode;
   setScreen('game');
   app.game = new Game(app, m);
-  if (!isTouch && !input.locked) hud.announce('Click to look around. Steer your parachute with WASD', 5000);
+  if (view) {
+    input.yaw = view[0];
+    input.pitch = view[1];
+  } else if (!m.resume && !isTouch && !input.locked) {
+    hud.announce('Click to look around. Steer your parachute with WASD', 5000);
+  }
 });
 
 net.on('s', (m) => {
@@ -335,7 +362,10 @@ net.on('end', (m) => {
   }, won ? 4200 : 2800);
 });
 
-net.connect();
+// Closing the tab gives up the seat at once instead of after the rejoin window.
+window.addEventListener('pagehide', (e) => {
+  if (!e.persisted) net.send({ t: 'leave' });
+});
 
 // ------------------------------------------------------------------ main loop
 let last = performance.now();

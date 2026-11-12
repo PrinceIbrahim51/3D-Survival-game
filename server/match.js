@@ -248,16 +248,35 @@ export class Match {
     startZone(this.zone, 0, this.rnd, this.world.isLand);
     zoneCircleAt(this.zone, 0, this.circle);
 
+    for (const c of this.clients.values()) c.send(this.startMessage(c, false));
+  }
+
+  // Everything a client needs to (re)build the match on its side.
+  startMessage(client, resume) {
+    const p = client.player;
     const roster = [];
-    for (const p of this.players.values()) roster.push([p.id, p.name, p.bot ? 1 : 0]);
+    for (const q of this.players.values()) roster.push([q.id, q.name, q.bot ? 1 : 0]);
     const loot = [];
     for (const it of this.loot.values()) loot.push([it.id, it.kind, r2(it.x), r2(it.y), r2(it.z), it.n]);
-    for (const c of this.clients.values()) {
-      const p = c.player;
-      c.send({
-        t: 'start', you: p.id, seed: this.opts.seed, total: this.total, players: roster, loot,
-        zone: this.zone, spawn: [p.s.x, p.s.y, p.s.z, p.yaw], mode: this.opts.mode,
-      });
+    return {
+      t: 'start', you: p.id, seed: this.opts.seed, total: this.total, players: roster, loot,
+      zone: this.zone, spawn: [p.s.x, p.s.y, p.s.z, p.yaw], mode: this.opts.mode,
+      resume, alive: p.alive, seq: p.lastSeq, chute: p.s.chute,
+    };
+  }
+
+  // Brings a client that reconnected back up to date.
+  resync(client) {
+    if (this.state === 'waiting') {
+      this.sendLobby();
+    } else if (this.state === 'playing' && client.player) {
+      client.player.lastState = '';
+      client.send(this.startMessage(client, true));
+      if (!client.player.alive) client.send(this.deadMessage(client.player));
+    } else if (this.state === 'ended') {
+      client.send(this.endMessage(client));
+    } else {
+      client.send({ t: 'idle' });
     }
   }
 
@@ -696,12 +715,16 @@ export class Match {
     });
     for (const p of ranked) {
       if (!p.client || p.place === 1) continue;
-      p.client.send({
-        t: 'dead', place: p.place, total: this.total, killer: p.killer, cause: p.cause,
-        kills: p.kills, damage: Math.round(p.damage),
-      });
+      p.client.send(this.deadMessage(p));
     }
     this.deadThisTick.length = 0;
+  }
+
+  deadMessage(p) {
+    return {
+      t: 'dead', place: p.place, total: this.total, killer: p.killer, cause: p.cause,
+      kills: p.kills, damage: Math.round(p.damage),
+    };
   }
 
   flagsOf(p) {
@@ -780,19 +803,22 @@ export class Match {
     }
     if (winner) winner.place = 1;
     this.winner = winner;
+    for (const c of this.clients.values()) c.send(this.endMessage(c));
+    this.endAt = Date.now() + this.opts.endSeconds * 1000;
+  }
+
+  endMessage(client) {
+    const winner = this.winner;
+    const p = client.player;
     const rows = Array.from(this.players.values())
       .sort((a, b) => a.place - b.place)
-      .map((p) => ({ id: p.id, name: p.name, bot: p.bot, place: p.place, kills: p.kills, damage: Math.round(p.damage) }));
-    for (const c of this.clients.values()) {
-      const p = c.player;
-      c.send({
-        t: 'end',
-        winner: winner ? { id: winner.id, name: winner.name, bot: winner.bot } : null,
-        rows,
-        you: p ? { id: p.id, place: p.place, kills: p.kills, damage: Math.round(p.damage) } : null,
-        total: this.total,
-      });
-    }
-    this.endAt = Date.now() + this.opts.endSeconds * 1000;
+      .map((q) => ({ id: q.id, name: q.name, bot: q.bot, place: q.place, kills: q.kills, damage: Math.round(q.damage) }));
+    return {
+      t: 'end',
+      winner: winner ? { id: winner.id, name: winner.name, bot: winner.bot } : null,
+      rows,
+      you: p ? { id: p.id, place: p.place, kills: p.kills, damage: Math.round(p.damage) } : null,
+      total: this.total,
+    };
   }
 }

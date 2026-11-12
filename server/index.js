@@ -6,7 +6,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer } from 'ws';
+import crypto from 'node:crypto';
+import WebSocket, { WebSocketServer } from 'ws';
 import { TICK_MS } from '../shared/constants.js';
 import { getWorld } from '../shared/world.js';
 import { getNav } from './nav.js';
@@ -41,7 +42,7 @@ export function sanitizeName(raw) {
 
 export function createServer(options = {}) {
   const env = options.env ?? process.env;
-  const maxPlayers = Math.max(2, Math.min(32, num(env.MAX_PLAYERS, 16)));
+  const maxPlayers = Math.max(2, Math.min(100, num(env.MAX_PLAYERS, 16)));
   const matchmaker = new Matchmaker({
     maxPlayers,
     fillTo: Math.max(2, Math.min(maxPlayers, num(env.BOT_FILL, 12))),
@@ -52,18 +53,72 @@ export function createServer(options = {}) {
   });
 
   const debugSpawn = env.DEBUG_SPAWN === '1'; // never enable on a public server
+  // A disconnected player keeps their seat this long so they can rejoin.
+  const resumeGraceMs = num(env.RESUME_GRACE, 20) * 1000;
+  // Hosts that cut long connections (serverless functions) set CONN_TTL so
+  // clients move to a fresh socket before the cut happens.
+  const connTtl = num(env.CONN_TTL, 0);
+  const instanceId = crypto.randomBytes(4).toString('hex');
+  const sessions = new Map(); // session id -> client
+
+  // Opens a WebSocket to our own public address and plays the first few
+  // protocol steps. Lets a deployment be verified with a plain HTTP request.
+  function selfTest(req) {
+    return new Promise((resolve) => {
+      const proto = String(req.headers['x-forwarded-proto'] || '').includes('https') ? 'wss' : 'ws';
+      const url = `${proto}://${req.headers.host}/api/ws`;
+      const t0 = Date.now();
+      const steps = [];
+      let done = false;
+      const finish = (ok, extra) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try {
+          sock.close();
+        } catch { /* already closed */ }
+        resolve({ ok, url, ms: Date.now() - t0, steps, instance: instanceId, ...extra });
+      };
+      const sock = new WebSocket(url);
+      const timer = setTimeout(() => finish(false, { error: 'timed out' }), 9000);
+      sock.on('error', (err) => finish(false, { error: String(err.message || err) }));
+      sock.on('unexpected-response', (_r, res) => finish(false, { error: 'HTTP ' + res.statusCode + ' instead of a WebSocket upgrade' }));
+      sock.on('message', (data) => {
+        let m;
+        try {
+          m = JSON.parse(data.toString());
+        } catch {
+          return;
+        }
+        steps.push(m.t);
+        if (m.t === 'hello') {
+          sock.send(JSON.stringify({ t: 'join', name: 'selftest', mode: 'practice' }));
+          sock.helloInst = m.inst;
+        } else if (m.t === 'lobby') {
+          sock.send(JSON.stringify({ t: 'leave' }));
+          finish(true, { sameInstance: sock.helloInst === instanceId, lobbyPlayers: m.players.length });
+        }
+      });
+    });
+  }
 
   const server = http.createServer((req, res) => {
+    let url;
     let pathname;
     try {
-      pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+      url = new URL(req.url, 'http://localhost');
+      pathname = decodeURIComponent(url.pathname);
     } catch {
       res.writeHead(400).end('Bad request');
       return;
     }
-    if (pathname === '/healthz') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, ...matchmaker.stats() }));
+    if (pathname === '/healthz' || pathname === '/api/ws' || pathname === '/ws') {
+      const reply = (body) => {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(body));
+      };
+      if (url.searchParams.has('selftest')) selfTest(req).then(reply);
+      else reply({ ok: true, instance: instanceId, sessions: sessions.size, ...matchmaker.stats() });
       return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -95,37 +150,83 @@ export function createServer(options = {}) {
     res.writeHead(404).end('Not found');
   });
 
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
+  const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
   let nextClientId = 1;
   const maxClients = num(env.MAX_CLIENTS, 200);
 
-  wss.on('connection', (ws) => {
-    if (wss.clients.size > maxClients) {
-      ws.close(1013, 'Server full');
-      return;
-    }
+  // A client is a player's session. Its socket can be replaced: after a
+  // dropped connection, or deliberately before a host's connection time limit.
+  function newClient() {
     const client = {
       id: nextClientId++,
-      ws,
+      sid: crypto.randomBytes(16).toString('hex'),
+      ws: null,
       name: 'Player',
       match: null,
       player: null,
       ready: false,
+      graceTimer: null,
       // Simple flood protection: at most `burst` messages banked, refilled at
       // `rate` per second. Normal play sends about 60 small messages a second.
       tokens: 240,
       lastRefill: Date.now(),
       send(obj) {
-        if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+        const ws = client.ws;
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
       },
       sendRaw(str) {
+        const ws = client.ws;
         // Drop snapshots for clients that cannot keep up instead of buffering forever.
-        if (ws.readyState === 1 && ws.bufferedAmount < 512 * 1024) ws.send(str);
+        if (ws && ws.readyState === 1 && ws.bufferedAmount < 512 * 1024) ws.send(str);
       },
     };
+    sessions.set(client.sid, client);
+    return client;
+  }
+
+  function drop(client) {
+    clearTimeout(client.graceTimer);
+    matchmaker.leave(client);
+    sessions.delete(client.sid);
+  }
+
+  function attach(client, ws) {
+    const old = client.ws;
+    clearTimeout(client.graceTimer);
+    client.ws = ws;
+    ws.client = client;
+    if (old && old !== ws) {
+      try {
+        old.close(4000, 'replaced');
+      } catch { /* already closing */ }
+    }
+  }
+
+  function detach(ws) {
+    const client = ws.client;
+    if (!client || client.ws !== ws) return; // an old socket that was already replaced
+    client.ws = null;
+    if (!client.match) drop(client);
+    else client.graceTimer = setTimeout(() => drop(client), resumeGraceMs);
+  }
+
+  const hello = (client, t) => ({ t, v: 2, sid: client.sid, inst: instanceId, ttl: connTtl });
+
+  wss.on('connection', (ws, req) => {
+    const pathname = String(req.url || '').split('?')[0];
+    if (pathname !== '/ws' && pathname !== '/api/ws') {
+      ws.close(1008, 'Unknown endpoint');
+      return;
+    }
+    if (wss.clients.size > maxClients) {
+      ws.close(1013, 'Server full');
+      return;
+    }
+    attach(newClient(), ws);
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
+      let client = ws.client;
       const now = Date.now();
       client.tokens = Math.min(240, client.tokens + ((now - client.lastRefill) / 1000) * 150);
       client.lastRefill = now;
@@ -153,6 +254,25 @@ export function createServer(options = {}) {
           if (err) client.send({ t: 'error', msg: err });
           break;
         }
+        case 'resume': {
+          // Take over an existing session with this new socket.
+          const prev = typeof msg.sid === 'string' ? sessions.get(msg.sid) : null;
+          if (!prev || prev === client) {
+            client.send({ t: 'gone' });
+            break;
+          }
+          sessions.delete(client.sid); // the placeholder session made for this socket
+          client = prev;
+          attach(client, ws);
+          client.send({ ...hello(client, 'resumed'), soft: !!msg.soft });
+          // A soft resume is a planned hand-over: nothing was missed, so the
+          // game simply continues on the new socket.
+          if (!msg.soft) {
+            if (client.match) client.match.resync(client);
+            else client.send({ t: 'idle' });
+          }
+          break;
+        }
         case 'ready':
           if (client.match) client.match.setReady(client, msg.v !== false);
           break;
@@ -165,9 +285,9 @@ export function createServer(options = {}) {
         default:
       }
     });
-    ws.on('close', () => matchmaker.leave(client));
+    ws.on('close', () => detach(ws));
     ws.on('error', () => {});
-    client.send({ t: 'hello', v: 1 });
+    ws.client.send(hello(ws.client, 'hello'));
   });
 
   // Fixed-rate simulation loop with drift correction.
@@ -187,11 +307,14 @@ export function createServer(options = {}) {
     server,
     wss,
     matchmaker,
+    sessions,
+    instanceId,
     listen(port = num(env.PORT, 3000), host = env.HOST || '0.0.0.0') {
       return new Promise((resolve) => server.listen(port, host, () => resolve(server.address())));
     },
     close() {
       clearInterval(timer);
+      for (const c of sessions.values()) clearTimeout(c.graceTimer);
       for (const ws of wss.clients) ws.terminate();
       return new Promise((resolve) => wss.close(() => server.close(() => resolve())));
     },

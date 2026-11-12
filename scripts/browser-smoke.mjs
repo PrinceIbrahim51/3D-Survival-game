@@ -37,7 +37,7 @@ async function open(name, spawn) {
     if (m.type() === 'error') errors.push(`${name}: ${m.text()}`);
   });
   await page.goto(`http://127.0.0.1:${port}/?spawn=${spawn}`);
-  await page.waitForFunction(() => window.__pls && window.__pls.net.connected);
+  await page.waitForFunction(() => window.__pls);
   await page.fill('#name', name);
   await page.fill('#room', 'smoke');
   await page.click('#play-room');

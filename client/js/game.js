@@ -54,16 +54,18 @@ export class Game {
     for (const [id, kind, x, y, z, n] of start.loot) this.loot.add(id, kind, x, y, z);
     this.lootN = new Map(start.loot.map((l) => [l[0], l[5]]));
 
-    this.alive = true;
+    // A resumed match (after a reconnect) may find us landed, or already out.
+    this.alive = start.alive !== false;
     this.ended = false;
+    this.lastTick = 0;
     this.s = makeMoveState(start.spawn[0], start.spawn[1], start.spawn[2]);
-    this.s.chute = true;
+    this.s.chute = start.resume ? !!start.chute : true;
     this.prev = copyMoveState(makeMoveState(), this.s);
     this.pos = new THREE.Vector3(this.s.x, this.s.y, this.s.z);
     this.corr = new THREE.Vector3();
     this.camY = this.s.y;
     this.eye = EYE_HEIGHT;
-    this.seq = 0;
+    this.seq = start.seq || 0; // the server ignores sequence numbers it has already seen
     this.pending = [];
     this.outbox = [];
     this.acc = 0;
@@ -103,7 +105,13 @@ export class Game {
     this.hud.setSpectate(null);
     this.hud.setPrompt(null);
     this.hud.stopProgress();
-    this.hud.announce('Steer your parachute and land near buildings to find gear', 5000);
+    if (!this.alive) {
+      this.input.spectating = true;
+      this.me.root.visible = false;
+      this.lastDeathPos.copy(this.pos);
+    } else if (!start.resume) {
+      this.hud.announce('Steer your parachute and land near buildings to find gear', 5000);
+    }
   }
 
   nameOf(id) {
@@ -119,6 +127,13 @@ export class Game {
     // Track the fastest packets: they give the best estimate of the clock offset.
     if (this.timeOffset === null || est > this.timeOffset || this.timeOffset - est > 600) this.timeOffset = est;
     else this.timeOffset += (est - this.timeOffset) * 0.02;
+    // During a socket hand-over a snapshot can arrive late. Its events still
+    // count, but its (older) positions and state must not overwrite newer ones.
+    if (m.n <= this.lastTick) {
+      if (m.e) for (const e of m.e) this.onEvent(e);
+      return;
+    }
+    this.lastTick = m.n;
     this.aliveCount = m.al;
 
     const seen = this.seen;
