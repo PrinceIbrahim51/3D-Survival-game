@@ -253,6 +253,10 @@ export function createServer(options = {}) {
         case 'ping':
           client.send({ t: 'pong', c: msg.c });
           break;
+        case 'debug':
+          // Test helpers (give items, set health). Only on servers started with DEBUG_SPAWN=1.
+          if (debugSpawn && client.match) client.match.onDebug(client, msg);
+          break;
         default:
       }
     });

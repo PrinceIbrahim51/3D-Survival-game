@@ -196,16 +196,29 @@ $('result-again').addEventListener('click', () => join(app.mode));
 $('result-menu').addEventListener('click', () => toMenu());
 $('pause-resume').addEventListener('click', () => showPause(false));
 $('pause-leave').addEventListener('click', leaveMatch);
-$('pausebtn').addEventListener('click', () => showPause(true));
-$('specnext').addEventListener('click', () => app.game && app.game.nextSpectate());
-$('specleave').addEventListener('click', leaveMatch);
-$('mapwrap').addEventListener('click', () => hud.toggleMap());
-$('bigmap').addEventListener('click', () => hud.toggleMap(false));
+// In-game controls react to pointerdown, not click: on a touch screen a click
+// is only produced for the first finger, so with a thumb on the joystick a
+// second finger tapping a weapon slot or the Med Kit would do nothing.
+function press(el, fn) {
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fn(e);
+  });
+}
+press($('pausebtn'), () => showPause(true));
+press($('specnext'), () => app.game && app.game.nextSpectate());
+press($('specleave'), leaveMatch);
+press($('mapwrap'), () => hud.toggleMap());
+press($('bigmap'), () => hud.toggleMap(false));
 for (const el of document.querySelectorAll('#weapons .slot')) {
-  el.addEventListener('click', () => input.act('slot', { n: Number(el.dataset.slot) }));
+  press(el, () => input.act('slot', { n: Number(el.dataset.slot) }));
 }
 for (const el of document.querySelectorAll('#belt [data-heal]')) {
-  el.addEventListener('click', () => input.act('heal', { k: el.dataset.heal }));
+  press(el, () => input.act('heal', { k: el.dataset.heal }));
+}
+for (const el of document.querySelectorAll('#belt [data-throw]')) {
+  press(el, () => input.act('throw', { k: el.dataset.throw }));
 }
 
 $('set-sens').value = settings.sens;

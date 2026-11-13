@@ -3,14 +3,16 @@
 // zone and the result). Clients only send inputs and requests.
 
 import { getWorld, WORLD_SEED } from '../shared/world.js';
-import { stepPlayer, makeMoveState, raycastWorld, rayPlayer, floorAt } from '../shared/physics.js';
+import {
+  stepPlayer, makeMoveState, raycastWorld, rayPlayer, floorAt, stepProjectile, projectileBlocked,
+} from '../shared/physics.js';
 import {
   TICK_DT, TICK_MS, INPUT_DT, BTN, BTN_MASK, PF, MAX_HP, PICKUP_RADIUS, INTERACT_RADIUS,
   MAX_REWIND_MS, CHUTE_ALTITUDE, CHUTE_FALL, eyeHeight, dirFromAngles,
 } from '../shared/constants.js';
 import {
   WEAPONS, WEAPON_KINDS, MELEE, HEAL, ITEMS, SWAP_TIME, BLOOM_DECAY, rollLoot, defaultAmount,
-  ammoItemKind,
+  ammoItemKind, THROW, THROW_SPEED, THROW_COOLDOWN, bloomScale,
 } from '../shared/items.js';
 import { createZone, startZone, updateZone, zoneCircleAt, insideCircle } from '../shared/zone.js';
 import * as Inv from './inventory.js';
@@ -42,6 +44,7 @@ class Player {
     this.inv = Inv.newInventory();
     this.clock = 0; // seconds of simulated input for this player
     this.nextFire = 0;
+    this.nextThrow = 0;
     this.reloadEnd = 0;
     this.heal = null; // { kind, end }
     this.bloom = 0;
@@ -94,6 +97,9 @@ export class Match {
     this.zone = createZone(this.opts.zoneScale);
     this.circle = { x: 0, z: 0, r: this.zone.from.r };
     this.events = [];
+    this.projectiles = []; // thrown grenades in flight
+    this.smokes = []; // active smoke clouds: { x, y, z, r, until }
+    this.nextProjId = 1;
     this.deadThisTick = [];
     this.aliveCount = 0;
     this.total = 0;
@@ -257,11 +263,12 @@ export class Match {
     const roster = [];
     for (const q of this.players.values()) roster.push([q.id, q.name, q.bot ? 1 : 0]);
     const loot = [];
-    for (const it of this.loot.values()) loot.push([it.id, it.kind, r2(it.x), r2(it.y), r2(it.z), it.n]);
+    for (const it of this.loot.values()) loot.push([it.id, it.kind, r2(it.x), r2(it.y), r2(it.z), it.n, it.a]);
+    const smokes = this.smokes.map((k) => [k.x, k.y, k.z, r2((k.until - this.time) / 1000)]);
     return {
       t: 'start', you: p.id, seed: this.opts.seed, total: this.total, players: roster, loot,
       zone: this.zone, spawn: [p.s.x, p.s.y, p.s.z, p.yaw], mode: this.opts.mode,
-      resume, alive: p.alive, seq: p.lastSeq, chute: p.s.chute,
+      resume, alive: p.alive, seq: p.lastSeq, chute: p.s.chute, smokes,
     };
   }
 
@@ -315,14 +322,16 @@ export class Match {
     return (Math.floor(x / LOOT_CELL) + 512) * 1024 + (Math.floor(z / LOOT_CELL) + 512);
   }
 
-  addLoot(kind, x, y, z, n, owner = null, silent = false) {
-    const it = { id: this.nextLootId++, kind, x, y, z, n, by: owner ? owner.id : 0, until: owner ? this.time + 4000 : 0 };
+  addLoot(kind, x, y, z, n, owner = null, silent = false, att = 0) {
+    const it = {
+      id: this.nextLootId++, kind, x, y, z, n, a: att | 0, by: owner ? owner.id : 0, until: owner ? this.time + 4000 : 0,
+    };
     this.loot.set(it.id, it);
     const key = this.lootKey(x, z);
     let cell = this.lootGrid.get(key);
     if (!cell) this.lootGrid.set(key, (cell = new Set()));
     cell.add(it);
-    if (!silent) this.events.push(['la', it.id, kind, r2(x), r2(y), r2(z), n]);
+    if (!silent) this.events.push(['la', it.id, kind, r2(x), r2(y), r2(z), n, it.a]);
     return it;
   }
 
@@ -346,7 +355,7 @@ export class Match {
       this.events.push(['lu', it.id, it.n]);
     }
     for (const d of res.drops) {
-      this.addLoot(d.kind, p.s.x, floorAt(this.world, p.s.x, p.s.z, p.s.y + 0.2), p.s.z, d.n, p);
+      this.addLoot(d.kind, p.s.x, floorAt(this.world, p.s.x, p.s.z, p.s.y + 0.2), p.s.z, d.n, p, false, d.a);
     }
     if (Inv.activeWeapon(p.inv) !== before) {
       p.reloadEnd = 0;
@@ -382,7 +391,7 @@ export class Match {
       const rad = n > 1 ? 0.9 : 0;
       const x = p.s.x + Math.cos(a) * rad;
       const z = p.s.z + Math.sin(a) * rad;
-      this.addLoot(d.kind, x, floorAt(this.world, x, z, p.s.y + 0.2), z, d.n);
+      this.addLoot(d.kind, x, floorAt(this.world, x, z, p.s.y + 0.2), z, d.n, null, false, d.a);
     });
     p.inv = Inv.newInventory();
   }
@@ -446,7 +455,7 @@ export class Match {
         if (p.s.chute) return;
         const d = Inv.dropActive(p.inv);
         if (d) {
-          this.addLoot(d.kind, p.s.x, floorAt(this.world, p.s.x, p.s.z, p.s.y + 0.2), p.s.z, d.n, p);
+          this.addLoot(d.kind, p.s.x, floorAt(this.world, p.s.x, p.s.z, p.s.y + 0.2), p.s.z, d.n, p, false, d.a);
           p.reloadEnd = 0;
           p.nextFire = Math.max(p.nextFire, p.clock + SWAP_TIME);
         }
@@ -455,8 +464,32 @@ export class Match {
       case 'cancel':
         p.heal = null;
         break;
+      case 'throw':
+        this.throwItem(p, msg.k, +msg.ay, +msg.ap);
+        break;
       default:
     }
+  }
+
+  // Development and test helper, reachable only when the server allows it.
+  onDebug(client, msg) {
+    const p = client.player;
+    if (!p || this.state !== 'playing') return;
+    if (Array.isArray(msg.give) && ITEMS[msg.give[0]]) {
+      const [kind, n, att] = msg.give;
+      const x = p.s.x + (+msg.dx || 0);
+      const z = p.s.z + (+msg.dz || 0);
+      this.addLoot(kind, x, floorAt(this.world, x, z, p.s.y + 0.3), z, n ?? defaultAmount(kind), null, false, att | 0);
+    }
+    if (Number.isFinite(msg.hp)) p.hp = clamp(msg.hp, 1, MAX_HP);
+    if (Array.isArray(msg.tp) && msg.tp.every(Number.isFinite)) {
+      p.s.x = msg.tp[0];
+      p.s.z = msg.tp[1];
+      p.s.y = floorAt(this.world, p.s.x, p.s.z, 500);
+      p.s.vx = p.s.vy = p.s.vz = 0;
+      p.s.chute = false;
+    }
+    if (msg.calm) for (const q of this.players.values()) if (q.ai) q.ai.passive = true;
   }
 
   switchSlot(p, slot) {
@@ -529,7 +562,7 @@ export class Match {
     w.mag--;
     p.nextFire = p.clock + 60 / def.rpm;
     p.heal = null;
-    this.fire(p, w.kind, def, inp);
+    this.fire(p, w, def, inp);
   }
 
   // Position of q at server time t (lag compensation).
@@ -557,7 +590,8 @@ export class Match {
     return out;
   }
 
-  fire(p, kind, def, inp) {
+  fire(p, w, def, inp) {
+    const kind = w.kind;
     const s = p.s;
     const ox = s.x;
     const oy = s.y + eyeHeight(s.crouch);
@@ -569,8 +603,9 @@ export class Match {
       speed: Math.sqrt(s.vx * s.vx + s.vz * s.vz),
       airborne: !s.ground,
       crouch: s.crouch,
+      att: w.att,
     });
-    p.bloom = Math.min(def.bloomMax, p.bloom + def.bloom);
+    p.bloom = Math.min(def.bloomMax, p.bloom + def.bloom * bloomScale(w.att));
     const rt = clamp(inp.rt ?? this.time, this.time - MAX_REWIND_MS, this.time);
     const ev = ['shot', p.id, WEAPON_KINDS.indexOf(kind)];
     const hits = new Map();
@@ -608,6 +643,92 @@ export class Match {
     for (const [victim, e] of hits) this.damage(victim, e.dmg, p, kind, e.head);
   }
 
+  // Throws a grenade or smoke along the given aim (with a slight upward arc).
+  throwItem(p, kind, yaw, pitch) {
+    const def = THROW[kind];
+    if (!def || !p.alive || p.s.chute || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return false;
+    if (p.inv[kind] <= 0 || p.clock < p.nextThrow) return false;
+    p.inv[kind]--;
+    p.nextThrow = p.clock + THROW_COOLDOWN;
+    p.heal = null;
+    const s = p.s;
+    const dir = dirFromAngles(yaw, clamp(pitch + 0.18, -1.3, 1.3));
+    const oy = s.y + eyeHeight(s.crouch) - 0.1;
+    let ox = s.x + dir.x * 0.5;
+    let oz = s.z + dir.z * 0.5;
+    if (projectileBlocked(this.world, ox, oy, oz)) {
+      ox = s.x; // hugging a wall: release from the body instead
+      oz = s.z;
+    }
+    // Launch values are rounded exactly as they are sent, so clients that
+    // simulate the same arc see the same bounces.
+    const proj = {
+      id: this.nextProjId++, kind, owner: p,
+      x: r2(ox), y: r2(oy), z: r2(oz),
+      vx: r2(dir.x * THROW_SPEED + s.vx * 0.5), vy: r2(dir.y * THROW_SPEED), vz: r2(dir.z * THROW_SPEED + s.vz * 0.5),
+      at: this.time + def.fuse * 1000,
+    };
+    this.projectiles.push(proj);
+    this.events.push(['nade', proj.id, kind, proj.x, proj.y, proj.z, proj.vx, proj.vy, proj.vz, def.fuse, p.id]);
+    return true;
+  }
+
+  updateProjectiles() {
+    if (this.smokes.length && this.smokes[0].until <= this.time) this.smokes = this.smokes.filter((k) => k.until > this.time);
+    if (!this.projectiles.length) return;
+    const live = [];
+    for (const proj of this.projectiles) {
+      stepProjectile(this.world, proj, TICK_DT);
+      if (this.time < proj.at) {
+        live.push(proj);
+        continue;
+      }
+      if (proj.kind === 'grenade') this.explode(proj);
+      else {
+        const def = THROW.smoke;
+        this.smokes.push({ x: proj.x, y: proj.y, z: proj.z, r: def.radius, until: this.time + def.duration * 1000 });
+        this.events.push(['smoke', proj.id, r2(proj.x), r2(proj.y), r2(proj.z), def.duration]);
+      }
+    }
+    this.projectiles = live;
+  }
+
+  explode(proj) {
+    const def = THROW.grenade;
+    this.events.push(['boom', proj.id, r2(proj.x), r2(proj.y), r2(proj.z)]);
+    const ox = proj.x;
+    const oy = proj.y + 0.3;
+    const oz = proj.z;
+    for (const q of this.players.values()) {
+      if (!q.alive) continue;
+      const dx = q.s.x - ox;
+      const dy = q.s.y + (q.s.crouch ? 0.6 : 1.0) - oy;
+      const dz = q.s.z - oz;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d > def.radius) continue;
+      // Walls and terrain shield from the blast.
+      if (d > 0.4 && raycastWorld(this.world, ox, oy, oz, dx / d, dy / d, dz / d, d) < d - 0.4) continue;
+      this.damage(q, def.dmg * (1 - d / def.radius), proj.owner, 'grenade', false, proj);
+    }
+  }
+
+  // True when a smoke cloud lies between two points (used for bot sight).
+  smokeBlocks(ax, ay, az, bx, by, bz) {
+    for (const k of this.smokes) {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const dz = bz - az;
+      const len2 = dx * dx + dy * dy + dz * dz;
+      let t = len2 > 0 ? ((k.x - ax) * dx + (k.y + 1 - ay) * dy + (k.z - az) * dz) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const cx = ax + dx * t - k.x;
+      const cy = ay + dy * t - (k.y + 1);
+      const cz = az + dz * t - k.z;
+      if (cx * cx + cy * cy + cz * cz < k.r * k.r * 0.72) return true;
+    }
+    return false;
+  }
+
   melee(p, inp) {
     this.events.push(['melee', p.id]);
     const dir = dirFromAngles(inp.yaw, 0);
@@ -626,7 +747,8 @@ export class Match {
     if (best) this.damage(best, MELEE.dmg, p, 'fists', false);
   }
 
-  damage(victim, amount, attacker, cause, head) {
+  // from: optional { x, z } the damage came from (defaults to the attacker).
+  damage(victim, amount, attacker, cause, head, from = null) {
     if (!victim.alive || !(amount > 0)) return;
     const t = { hp: victim.hp, armor: victim.inv.armor };
     const lost = applyDamage(t, amount, cause === 'zone');
@@ -634,13 +756,15 @@ export class Match {
     victim.inv.armor = t.armor;
     if (t.armor <= 0) victim.inv.armorLvl = 0;
     const killed = victim.hp <= 0;
-    if (attacker) {
+    const self = attacker === victim;
+    if (attacker && !self) {
       attacker.damage += amount;
       attacker.events.push(['hit', victim.id, Math.round(amount), head ? 1 : 0, killed ? 1 : 0]);
-      victim.events.push(['dmg', Math.round(lost), r2(attacker.s.x), r2(attacker.s.z)]);
       if (victim.ai) victim.ai.onHurt(attacker);
     }
-    if (killed) this.kill(victim, attacker, cause);
+    const src = from || (attacker && !self ? attacker.s : null);
+    if (src) victim.events.push(['dmg', Math.round(lost), r2(src.x), r2(src.z)]);
+    if (killed) this.kill(victim, self ? null : attacker, cause);
   }
 
   kill(victim, attacker, cause) {
@@ -685,6 +809,7 @@ export class Match {
       }
     }
 
+    this.updateProjectiles();
     if (updateZone(this.zone, this.time, this.rnd, this.world.isLand)) this.events.push(['zone', this.zone]);
     zoneCircleAt(this.zone, this.time, this.circle);
     for (const p of this.players.values()) {
@@ -748,11 +873,13 @@ export class Match {
       ar: Math.ceil(inv.armor),
       al: inv.armorLvl,
       bp: inv.pack,
-      w: inv.weapons.map((x) => (x ? [x.kind, x.mag] : null)),
+      w: inv.weapons.map((x) => (x ? [x.kind, x.mag, x.att] : null)),
       s: inv.active,
       am: [inv.ammo.light, inv.ammo.rifle, inv.ammo.shell, inv.ammo.sniper],
       bd: inv.bandage,
       mk: inv.medkit,
+      gr: inv.grenade,
+      sm: inv.smoke,
       rl: p.reloadEnd && w ? WEAPONS[w.kind].reload : 0,
       hl: p.heal ? p.heal.kind : 0,
       k: p.kills,

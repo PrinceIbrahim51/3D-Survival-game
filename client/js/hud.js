@@ -1,7 +1,7 @@
 // Heads-up display: all DOM, updated only when values change.
 
 import { WORLD_SIZE, WORLD_HALF, MAX_HP } from '/shared/constants.js';
-import { WEAPONS, ARMOR, MELEE, ITEMS } from '/shared/items.js';
+import { WEAPONS, ARMOR, MELEE, ITEMS, ATTACHMENTS } from '/shared/items.js';
 import { POIS } from '/shared/world.js';
 
 const $ = (id) => document.getElementById(id);
@@ -57,6 +57,10 @@ export class Hud {
     this.set('btn-bandage', 'empty', st.bd === 0);
     this.set('btn-medkit', 'empty', st.mk === 0);
     this.set('n-pack', 'text', st.bp ? 'L' + st.bp : '-');
+    this.set('n-grenade', 'text', String(st.gr));
+    this.set('n-smoke', 'text', String(st.sm));
+    this.set('btn-grenade', 'empty', st.gr === 0);
+    this.set('btn-smoke', 'empty', st.sm === 0);
     const ammo = { light: st.am[0], rifle: st.am[1], shell: st.am[2], sniper: st.am[3] };
     const key = JSON.stringify([st.w, st.s, st.am]);
     if (this.cache.weapons !== key) {
@@ -78,6 +82,14 @@ export class Hud {
         } else {
           const def = WEAPONS[w[0]];
           name.textContent = def.name;
+          // Fitted attachments, e.g. "MAG  SCOPE".
+          const tags = Object.values(ATTACHMENTS).filter((a) => w[2] & a.bit).map((a) => a.tag).join('  ');
+          if (tags) {
+            const t = document.createElement('span');
+            t.className = 'watt';
+            t.textContent = tags;
+            name.append(t);
+          }
           am.textContent = '';
           am.append(String(w[1]));
           const small = document.createElement('small');
@@ -308,6 +320,7 @@ export function causeText(cause) {
   if (cause === 'zone') return 'lost to the zone';
   if (cause === 'left') return 'left the match';
   if (cause === 'fists') return 'knocked out';
+  if (cause === 'grenade') return 'blew up';
   const w = WEAPONS[cause];
   return w ? `[${w.name}]` : 'eliminated';
 }

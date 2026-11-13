@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Match } from '../server/match.js';
 import { mulberry32 } from '../shared/rng.js';
 import { BTN, INPUT_DT, TICK_RATE, SPRINT_SPEED, INTERACT_RADIUS } from '../shared/constants.js';
-import { WEAPONS } from '../shared/items.js';
+import { WEAPONS, THROW, ATT, magSize } from '../shared/items.js';
 import { FIELDS } from '../shared/world.js';
 
 function fakeClient(id, name = 'P' + id) {
@@ -312,4 +312,108 @@ test('lobby: readying up starts the match early, leaving empties it', () => {
   m2.addClient(c);
   m2.removeClient(c);
   assert.equal(m2.state, 'closed');
+});
+
+test('a grenade arcs, explodes after its fuse and hurts those in the open', () => {
+  const { m, clients } = startMatch(3);
+  const [a, b, c] = clients.map((x) => x.player);
+  // b stands 9 m in front of a; c is far away.
+  b.s.x = a.s.x;
+  b.s.z = a.s.z - 9;
+  c.s.x = a.s.x + 40;
+  a.inv.grenade = 1;
+  m.onAction(clients[0], { a: 'throw', k: 'grenade', ay: 0, ap: 0.05 });
+  assert.equal(a.inv.grenade, 0);
+  assert.equal(m.projectiles.length, 1);
+  m.onAction(clients[0], { a: 'throw', k: 'grenade', ay: 0, ap: 0.05 });
+  assert.equal(m.projectiles.length, 1, 'cannot throw what you do not have');
+  for (let i = 0; i < TICK_RATE * (THROW.grenade.fuse + 0.5); i++) m.step();
+  assert.equal(m.projectiles.length, 0);
+  const ev = clients[2].events();
+  const nade = ev.find((e) => e[0] === 'nade');
+  const boom = ev.find((e) => e[0] === 'boom');
+  assert.ok(nade && boom && boom[1] === nade[1]);
+  assert.ok(Math.abs(boom[4] - (a.s.z - 9)) < 6, `landed near the target (z ${boom[4]} vs ${a.s.z - 9})`);
+  assert.ok(b.hp < 100, 'the target was hurt');
+  assert.equal(c.hp, 100, 'someone far away was not');
+  assert.ok(clients[1].events().some((e) => e[0] === 'dmg'));
+  assert.ok(clients[0].events().some((e) => e[0] === 'hit' && e[1] === b.id));
+});
+
+test('a grenade hurts its thrower too, and walls shield from the blast', () => {
+  const { m, clients } = startMatch(2);
+  const [a, b] = clients.map((x) => x.player);
+  b.s.x = a.s.x + 60;
+  a.inv.grenade = 2;
+  // Dropped at the thrower's own feet.
+  m.onAction(clients[0], { a: 'throw', k: 'grenade', ay: 0, ap: -1.4 });
+  for (let i = 0; i < TICK_RATE * (THROW.grenade.fuse + 0.3); i++) m.step();
+  assert.ok(a.hp < 60, `self damage, hp ${a.hp}`);
+  assert.equal(a.kills, 0);
+  assert.equal(clients[0].events().some((e) => e[0] === 'hit'), false, 'no hit marker for hurting yourself');
+
+  // Blast on the far side of the outpost wall.
+  const wall = m.world.boxes.find((x) => x.k === 'compound' && x.x1 - x.x0 > 10 && x.z1 - x.z0 < 1);
+  const wx = (wall.x0 + wall.x1) / 2 + 8;
+  b.s.x = wx;
+  b.s.z = wall.z1 + 1.2;
+  b.s.y = m.world.heightAt(wx, b.s.z);
+  const hp = b.hp;
+  m.explode({ id: 99, kind: 'grenade', owner: a, x: wx, y: m.world.heightAt(wx, wall.z0 - 1.2), z: wall.z0 - 1.2 });
+  assert.equal(b.hp, hp, 'shielded by the wall');
+  m.explode({ id: 100, kind: 'grenade', owner: a, x: wx + 2, y: b.s.y, z: b.s.z });
+  assert.ok(b.hp < hp, 'not shielded on the same side');
+});
+
+test('smoke hides players from bots until it clears', () => {
+  const c = fakeClient(1);
+  const m = new Match({ mode: 'practice', maxPlayers: 1, fillTo: 2, lobbySeconds: 0, rnd: mulberry32(8) });
+  m.addClient(c);
+  m.update();
+  const human = c.player;
+  const bot = [...m.players.values()].find((p) => p.bot);
+  for (const p of [human, bot]) {
+    p.s.chute = false;
+    p.s.ground = true;
+    p.s.y = m.world.heightAt(FIELDS.x1 - 10, FIELDS.z0 + 20);
+    p.s.vy = 0;
+  }
+  human.s.x = FIELDS.x1 - 10;
+  human.s.z = FIELDS.z0 + 20;
+  bot.s.x = human.s.x;
+  bot.s.z = human.s.z + 16;
+  assert.equal(bot.ai.canSee(human), true);
+  human.inv.smoke = 1;
+  m.onAction(c, { a: 'throw', k: 'smoke', ay: Math.PI, ap: -0.1 }); // toward the bot
+  for (let i = 0; i < TICK_RATE * (THROW.smoke.fuse + 0.2); i++) {
+    bot.s.x = human.s.x;
+    bot.s.z = human.s.z + 16; // hold the bot still for the test
+    m.step();
+  }
+  assert.equal(m.smokes.length, 1);
+  assert.ok(c.events().some((e) => e[0] === 'smoke'));
+  assert.equal(bot.ai.canSee(human), false, 'the cloud is in the way');
+  m.time += THROW.smoke.duration * 1000 + 100;
+  m.updateProjectiles();
+  assert.equal(m.smokes.length, 0);
+  assert.equal(bot.ai.canSee(human), true);
+});
+
+test('attachments change how a weapon behaves on the server', () => {
+  const { m, clients } = startMatch(2);
+  const p = clients[0].player;
+  const it = m.addLoot('ar', p.s.x, p.s.y, p.s.z, 30, null, false, ATT.MAG);
+  m.step();
+  assert.equal(p.inv.weapons[0].att, ATT.MAG, 'a dropped weapon keeps its attachments');
+  assert.equal(m.loot.has(it.id), false);
+  p.inv.ammo.rifle = 60;
+  let seq = 1;
+  for (let tick = 0; tick < TICK_RATE * 3; tick++) {
+    m.onInput(clients[0], [input(seq++, { b: BTN.RELOAD }), input(seq++, { b: BTN.RELOAD })]);
+    m.step();
+  }
+  assert.equal(p.inv.weapons[0].mag, magSize('ar', ATT.MAG));
+  const st = JSON.parse(clients[0].raw.map((r) => JSON.parse(r)).filter((x) => x.st).pop().st ? JSON.stringify(clients[0].raw.map((r) => JSON.parse(r)).filter((x) => x.st).pop().st) : '{}');
+  assert.deepEqual(st.w[0], ['ar', magSize('ar', ATT.MAG), ATT.MAG]);
+  assert.equal(st.gr, 0);
 });

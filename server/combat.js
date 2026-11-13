@@ -1,6 +1,6 @@
 // Pure combat maths: damage, armour and bullet spread.
 
-import { ARMOR_ABSORB, AIR_SPREAD, damageFalloff } from '../shared/items.js';
+import { ARMOR_ABSORB, AIR_SPREAD, damageFalloff, adsSpreadScale } from '../shared/items.js';
 import { WALK_SPEED } from '../shared/constants.js';
 
 const PART_MULT = { body: 1, legs: 0.75 };
@@ -29,8 +29,8 @@ export function applyDamage(target, amount, ignoreArmor = false) {
 }
 
 // Cone half-angle (degrees) for the next shot.
-export function spreadDegrees(def, { ads, bloom, speed, airborne, crouch }) {
-  let s = ads ? def.spreadAds : def.spread;
+export function spreadDegrees(def, { ads, bloom, speed, airborne, crouch, att = 0 }) {
+  let s = ads ? def.spreadAds * adsSpreadScale(att) : def.spread;
   s += bloom;
   s += def.movePen * Math.min(1.5, speed / WALK_SPEED) * (ads ? 0.6 : 1);
   if (airborne) s += AIR_SPREAD;

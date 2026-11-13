@@ -77,6 +77,8 @@ export class Input {
         case 'Digit3': this.act('slot', { n: 2 }); break;
         case 'Digit4': this.act('heal', { k: 'bandage' }); break;
         case 'Digit5': this.act('heal', { k: 'medkit' }); break;
+        case 'Digit6': this.act('throw', { k: 'grenade' }); break;
+        case 'Digit7': this.act('throw', { k: 'smoke' }); break;
         case 'KeyH': this.act('heal', {}); break;
         case 'KeyQ': this.act('swap'); break;
         case 'KeyF': case 'KeyE': this.act('pickup'); break;

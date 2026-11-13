@@ -359,3 +359,54 @@ export function rayPlayer(ox, oy, oz, dx, dy, dz, maxDist, px, py, pz, crouch) {
   }
   return part ? { t: best, part } : null;
 }
+
+// ---------------------------------------------------------------- throwables
+
+const PROJ_GRAVITY = 20;
+const PROJ_RADIUS = 0.12;
+const projScratch = [];
+
+function pointBlocked(world, x, y, z) {
+  const r = PROJ_RADIUS;
+  const boxes = world.queryBoxes(x - r, z - r, x + r, z + r, projScratch);
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i];
+    if (x > b.x0 - r && x < b.x1 + r && z > b.z0 - r && z < b.z1 + r && y > b.y0 - r && y < b.y1 + r) return true;
+  }
+  return false;
+}
+
+// Advances a thrown object { x, y, z, vx, vy, vz }: gravity, bouncing off the
+// ground and off boxes. Deterministic, so clients can draw the same arc the
+// server simulates from just the launch state.
+export function stepProjectile(world, p, dt) {
+  const sub = 3;
+  const h = dt / sub;
+  for (let i = 0; i < sub; i++) {
+    p.vy -= PROJ_GRAVITY * h;
+    const nx = p.x + p.vx * h;
+    if (pointBlocked(world, nx, p.y, p.z)) p.vx = -p.vx * 0.4;
+    else p.x = nx;
+    const nz = p.z + p.vz * h;
+    if (pointBlocked(world, p.x, p.y, nz)) p.vz = -p.vz * 0.4;
+    else p.z = nz;
+    let ny = p.y + p.vy * h;
+    const floor = world.heightAt(p.x, p.z) + PROJ_RADIUS;
+    const hitBox = pointBlocked(world, p.x, ny, p.z);
+    if (ny < floor || hitBox) {
+      ny = ny < floor ? floor : p.y;
+      p.vy = Math.abs(p.vy) < 1.5 ? 0 : -p.vy * 0.35;
+      p.vx *= 0.7;
+      p.vz *= 0.7;
+    }
+    p.y = ny;
+  }
+  const lim = WORLD_HALF - 1;
+  if (p.x < -lim) p.x = -lim; else if (p.x > lim) p.x = lim;
+  if (p.z < -lim) p.z = -lim; else if (p.z > lim) p.z = lim;
+  return p;
+}
+
+export function projectileBlocked(world, x, y, z) {
+  return pointBlocked(world, x, y, z);
+}

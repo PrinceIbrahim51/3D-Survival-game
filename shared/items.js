@@ -56,6 +56,43 @@ export const HEAL = {
   medkit: { name: 'Med Kit', hp: 100, upTo: 100, time: 5.5, cap: 2, pack: 1 },
 };
 
+// Throwables. Frag grenades hurt everyone in range with a clear line to the
+// blast (including the thrower); smoke blocks sight for a while.
+export const THROW = {
+  grenade: { name: 'Frag Grenade', cap: 3, pack: 1, fuse: 2.6, radius: 7.5, dmg: 115 },
+  smoke: { name: 'Smoke Grenade', cap: 2, pack: 1, fuse: 1.6, radius: 6, duration: 14 },
+};
+export const THROW_SPEED = 17;
+export const THROW_COOLDOWN = 0.9;
+
+// Weapon attachments are bit flags stored with each weapon.
+export const ATT = { MAG: 1, SCOPE: 2, GRIP: 4 };
+export const ATTACHMENTS = {
+  att_mag: { bit: ATT.MAG, name: 'Extended Mag', tag: 'MAG', fits: ['pistol', 'smg', 'ar', 'shotgun', 'sniper'] },
+  att_scope: { bit: ATT.SCOPE, name: '2.5x Scope', tag: 'SCOPE', fits: ['smg', 'ar'] },
+  att_grip: { bit: ATT.GRIP, name: 'Recoil Grip', tag: 'GRIP', fits: ['smg', 'ar', 'shotgun'] },
+};
+export const SCOPE_ZOOM = 2.6;
+
+// Magazine size of a weapon with its attachments.
+export function magSize(kind, att = 0) {
+  const base = WEAPONS[kind].mag;
+  return att & ATT.MAG ? Math.round(base * 1.5) : base;
+}
+export function adsZoom(kind, att = 0) {
+  return att & ATT.SCOPE ? SCOPE_ZOOM : WEAPONS[kind].zoom;
+}
+// Multipliers applied by attachments.
+export function recoilScale(att = 0) {
+  return att & ATT.GRIP ? 0.65 : 1;
+}
+export function bloomScale(att = 0) {
+  return att & ATT.GRIP ? 0.7 : 1;
+}
+export function adsSpreadScale(att = 0) {
+  return att & ATT.SCOPE ? 0.7 : 1;
+}
+
 export const PACK_MULT = [1, 1.5, 2]; // carrying-capacity multiplier per backpack level
 export const PACK_NAMES = ['No backpack', 'Small Backpack', 'Large Backpack'];
 
@@ -76,6 +113,11 @@ export const ITEMS = {
   armor2: { type: 'armor', level: 2, name: ARMOR[2].name },
   pack1: { type: 'pack', level: 1, name: PACK_NAMES[1] },
   pack2: { type: 'pack', level: 2, name: PACK_NAMES[2] },
+  grenade: { type: 'throw', throw: 'grenade', name: THROW.grenade.name },
+  smoke: { type: 'throw', throw: 'smoke', name: THROW.smoke.name },
+  att_mag: { type: 'att', name: ATTACHMENTS.att_mag.name },
+  att_scope: { type: 'att', name: ATTACHMENTS.att_scope.name },
+  att_grip: { type: 'att', name: ATTACHMENTS.att_grip.name },
 };
 
 export function ammoItemKind(ammoType) {
@@ -89,11 +131,13 @@ export const LOOT_TABLE = {
     ['pistol', 9], ['smg', 9], ['ar', 7], ['shotgun', 6], ['sniper', 2],
     ['a_light', 9], ['a_rifle', 8], ['a_shell', 5], ['a_sniper', 3],
     ['bandage', 14], ['medkit', 4], ['armor1', 9], ['armor2', 2], ['pack1', 6], ['pack2', 2],
+    ['grenade', 6], ['smoke', 3], ['att_mag', 3], ['att_scope', 3], ['att_grip', 3],
   ],
   2: [
     ['pistol', 2], ['smg', 8], ['ar', 12], ['shotgun', 6], ['sniper', 6],
     ['a_light', 6], ['a_rifle', 9], ['a_shell', 4], ['a_sniper', 5],
     ['bandage', 9], ['medkit', 8], ['armor1', 5], ['armor2', 8], ['pack1', 3], ['pack2', 5],
+    ['grenade', 7], ['smoke', 4], ['att_mag', 4], ['att_scope', 5], ['att_grip', 4],
   ],
 };
 
@@ -117,6 +161,7 @@ export function defaultAmount(kind) {
     case 'ammo': return AMMO[it.ammo].pack;
     case 'heal': return HEAL[it.heal].pack;
     case 'armor': return ARMOR[it.level].points;
+    case 'throw': return THROW[it.throw].pack;
     default: return 1;
   }
 }

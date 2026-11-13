@@ -118,6 +118,23 @@ export class GameAudio {
     this.tone(dest, { freq: s.thump * 1.6, to: s.thump * 0.5, decay: s.decay * 0.9, gain: 0.9 });
   }
 
+  boom(x, z) {
+    if (!this.ctx) return;
+    const [gain, pan] = this.spatial(x, z, 320);
+    if (gain < 0.01) return;
+    const dest = this.out(Math.min(1, gain * 1.6), pan);
+    this.noiseBurst(dest, { freq: 180, q: 0.5, decay: 0.9, gain: 1, type: 'lowpass' });
+    this.noiseBurst(dest, { freq: 1200, q: 0.4, decay: 0.25, gain: 0.6 });
+    this.tone(dest, { freq: 90, to: 28, decay: 0.8, gain: 1 });
+  }
+
+  hiss(x, z) {
+    if (!this.ctx) return;
+    const [gain, pan] = this.spatial(x, z, 60);
+    if (gain < 0.02) return;
+    this.noiseBurst(this.out(gain * 0.4, pan), { freq: 5000, q: 0.6, decay: 1.6, gain: 1, type: 'highpass' });
+  }
+
   step(x, z, own) {
     if (!this.ctx) return;
     const [gain, pan] = this.spatial(x, z, 22);

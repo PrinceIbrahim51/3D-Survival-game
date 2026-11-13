@@ -3,11 +3,16 @@
 // The server stays authoritative for every gameplay result.
 
 import * as THREE from 'three';
-import { stepPlayer, makeMoveState, copyMoveState, raycastWorld, rayPlayer, isSwimming } from '/shared/physics.js';
 import {
-  BTN, PF, INPUT_DT, INTERP_DELAY_MS, INTERACT_RADIUS, WALK_SPEED, EYE_HEIGHT, CROUCH_EYE_HEIGHT, dirFromAngles,
+  stepPlayer, makeMoveState, copyMoveState, raycastWorld, rayPlayer, isSwimming, stepProjectile,
+} from '/shared/physics.js';
+import {
+  BTN, PF, INPUT_DT, TICK_DT, INTERP_DELAY_MS, INTERACT_RADIUS, WALK_SPEED, EYE_HEIGHT, CROUCH_EYE_HEIGHT, dirFromAngles,
 } from '/shared/constants.js';
-import { WEAPONS, WEAPON_KINDS, MELEE, ITEMS, HEAL, SWAP_TIME, BLOOM_DECAY, AIR_SPREAD } from '/shared/items.js';
+import {
+  WEAPONS, WEAPON_KINDS, MELEE, ITEMS, HEAL, THROW, SWAP_TIME, BLOOM_DECAY, AIR_SPREAD, adsZoom, recoilScale, bloomScale,
+  adsSpreadScale,
+} from '/shared/items.js';
 import { zoneCircleAt, insideCircle } from '/shared/zone.js';
 import { createCharacter, LootView } from './models.js';
 import { Effects } from './effects.js';
@@ -76,6 +81,10 @@ export class Game {
     this.stepDist = 0;
     this.st = null;
     this.kills = 0;
+
+    this.nades = new Map(); // thrown grenades in flight, simulated locally from their launch state
+    this.shake = 0;
+    for (const k of start.smokes || []) this.effects.smoke(v1.set(k[0], k[1], k[2]), THROW.smoke.radius, k[3]);
 
     this.me = createCharacter(this.myId);
     this.root.add(this.me.root);
@@ -281,7 +290,54 @@ export class Game {
         this.hud.pickupLog(e[1]);
         this.audio.ui('pickup');
         break;
+      case 'nade': {
+        const mesh = this.effects.takeNade(e[2]);
+        this.nades.set(e[1], {
+          kind: e[2], p: { x: e[3], y: e[4], z: e[5], vx: e[6], vy: e[7], vz: e[8] }, acc: 0, life: e[9] + 1.5, mesh,
+        });
+        if (e[10] === this.myId) this.me.punch = 1;
+        else this.audio.swing(e[3], e[5]);
+        break;
+      }
+      case 'boom': {
+        this.dropNade(e[1]);
+        v1.set(e[2], e[3], e[4]);
+        this.effects.explosion(v1);
+        this.audio.boom(e[2], e[4]);
+        const d = Math.hypot(e[2] - this.pos.x, e[4] - this.pos.z);
+        if (d < 30) this.shake = Math.max(this.shake, 1 - d / 30);
+        break;
+      }
+      case 'smoke':
+        this.dropNade(e[1]);
+        this.effects.smoke(v1.set(e[2], e[3], e[4]), THROW.smoke.radius, e[5]);
+        this.audio.hiss(e[2], e[4]);
+        break;
       default:
+    }
+  }
+
+  dropNade(id) {
+    const n = this.nades.get(id);
+    if (!n) return;
+    if (n.mesh) n.mesh.visible = false;
+    this.nades.delete(id);
+  }
+
+  updateNades(dt) {
+    for (const [id, n] of this.nades) {
+      n.acc += dt;
+      n.life -= dt;
+      // Same fixed step as the server, so the arc and bounces match.
+      while (n.acc >= TICK_DT) {
+        n.acc -= TICK_DT;
+        stepProjectile(this.world, n.p, TICK_DT);
+      }
+      if (n.mesh) {
+        n.mesh.position.set(n.p.x + n.p.vx * n.acc, n.p.y, n.p.z + n.p.vz * n.acc);
+        n.mesh.rotation.x += dt * 9;
+      }
+      if (n.life <= 0) this.dropNade(id);
     }
   }
 
@@ -343,6 +399,12 @@ export class Game {
     const st = this.st;
     if (!st || st.s === 2 || !st.w[st.s]) return null;
     return WEAPONS[st.w[st.s][0]];
+  }
+
+  // Attachment flags of the weapon in hand.
+  activeAtt() {
+    const st = this.st;
+    return st && st.s !== 2 && st.w[st.s] ? st.w[st.s][2] | 0 : 0;
   }
 
   // Direction from the character's eyes to whatever is under the crosshair.
@@ -434,9 +496,10 @@ export class Game {
     }
     this.nextFire = this.clock + 60 / def.rpm;
     this.shots.push(seq);
-    this.bloom = Math.min(def.bloomMax, this.bloom + def.bloom);
+    const att = w[2] | 0;
+    this.bloom = Math.min(def.bloomMax, this.bloom + def.bloom * bloomScale(att));
     // Recoil: the view climbs and wanders a little; the player pulls it back.
-    const k = ((b & BTN.ADS) ? 0.65 : 1) * (this.s.crouch ? 0.8 : 1);
+    const k = ((b & BTN.ADS) ? 0.65 : 1) * (this.s.crouch ? 0.8 : 1) * recoilScale(att);
     this.input.pitch = Math.min(1.45, this.input.pitch + def.recoil * 0.011 * k);
     this.input.yaw += (Math.random() - 0.5) * def.recoil * 0.009 * k;
     const dir = dirFromAngles(aim[0], aim[1], this.fireDir || (this.fireDir = new THREE.Vector3()));
@@ -493,13 +556,25 @@ export class Game {
         break;
       }
       case 'pickup': {
-        const it = this.nearestLoot(true);
+        // The weapon named in the on-screen prompt comes first; other items
+        // lying closer (full ammo, spare bandages) must not get in the way.
+        const it = this.nearestLoot(false) || this.nearestLoot(true);
         if (it) this.net.send({ t: 'act', a: 'pickup', id: it.id });
         break;
       }
       case 'drop':
         this.net.send({ t: 'act', a: 'drop' });
         break;
+      case 'throw': {
+        const k = act.k === 'smoke' ? 'smoke' : 'grenade';
+        if (this.s.chute) return;
+        if (st[k === 'smoke' ? 'sm' : 'gr'] <= 0) {
+          this.hud.announce('No ' + THROW[k].name + ' to throw', 1200);
+          return;
+        }
+        this.net.send({ t: 'act', a: 'throw', k, ay: round5(this.input.yaw), ap: round5(this.input.pitch) });
+        break;
+      }
       default:
     }
   }
@@ -560,6 +635,7 @@ export class Game {
 
     this.updateRemotes(dt);
     this.updateSelf(dt);
+    this.updateNades(dt);
     zoneCircleAt(this.zone, this.serverTime, this.circle);
     this.effects.setZone(this.circle, now / 1000);
     this.updateCamera(dt);
@@ -679,7 +755,7 @@ export class Game {
         wantDist = 1.5;
         wantSide = 0.46;
         wantUp = 0.1;
-        const zoom = def ? def.zoom : 1.15;
+        const zoom = def ? adsZoom(this.st.w[this.st.s][0], this.activeAtt()) : 1.15;
         wantFov = (2 * Math.atan(Math.tan((BASE_FOV * Math.PI) / 360) / zoom) * 180) / Math.PI;
         scoped = !!(def && def.scope && !(this.st && this.st.rl));
       }
@@ -740,6 +816,12 @@ export class Game {
       if (cam.position.y < ground) cam.position.y = ground;
     }
     cam.rotation.set(pitch, yaw, 0, 'YXZ');
+    if (this.shake > 0.01) {
+      // Explosion nearby: jolt the view briefly.
+      cam.rotation.x += (Math.random() - 0.5) * this.shake * 0.07;
+      cam.rotation.y += (Math.random() - 0.5) * this.shake * 0.07;
+      this.shake *= Math.exp(-dt * 6);
+    }
     this.app.worldView.follow(px, py, pz);
     this.audio.setListener(px, pz, yaw);
   }
@@ -782,7 +864,7 @@ export class Game {
     let visible = this.alive && !s.chute && !this.scoped;
     let gap = 7;
     if (def) {
-      let deg = (ads ? def.spreadAds : def.spread) + this.bloom;
+      let deg = (ads ? def.spreadAds * adsSpreadScale(this.activeAtt()) : def.spread) + this.bloom;
       deg += def.movePen * Math.min(1.5, Math.sqrt(s.vx * s.vx + s.vz * s.vz) / WALK_SPEED) * (ads ? 0.6 : 1);
       if (!s.ground) deg += AIR_SPREAD;
       if (s.crouch) deg *= 0.8;

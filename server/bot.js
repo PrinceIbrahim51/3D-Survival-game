@@ -3,7 +3,7 @@
 // movement, fire-rate and inventory rule.
 
 import { BTN, eyeHeight, SPRINT_SPEED } from '../shared/constants.js';
-import { WEAPONS, ITEMS, HEAL } from '../shared/items.js';
+import { WEAPONS, ITEMS, HEAL, ATTACHMENTS, THROW_SPEED } from '../shared/items.js';
 import { raycastWorld } from '../shared/physics.js';
 import { insideCircle } from '../shared/zone.js';
 import * as Inv from './inventory.js';
@@ -125,6 +125,7 @@ export class Bot {
     const dz = q.s.z - oz;
     const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (d < 0.5) return true;
+    if (this.m.smokes.length && this.m.smokeBlocks(ox, oy, oz, q.s.x, q.s.y + 1.2, q.s.z)) return false;
     return raycastWorld(this.m.world, ox, oy, oz, dx / d, dy / d, dz / d, d) >= d - 0.3;
   }
 
@@ -166,6 +167,12 @@ export class Bot {
         return it.n > inv.armor ? 2 : 0;
       case 'pack':
         return info.level > inv.pack ? 1 : 0;
+      case 'throw':
+        return inv[info.throw] < 2 ? 0.8 : 0;
+      case 'att': {
+        const def = ATTACHMENTS[it.kind];
+        return inv.weapons.some((w) => w && def.fits.includes(w.kind) && !(w.att & def.bit)) ? 1 : 0;
+      }
       default:
         return 0;
     }
@@ -264,6 +271,7 @@ export class Bot {
     // Opening truce: for the first seconds everyone is busy looting, so bots
     // only fight back when shot at.
     if (nearest && t < GRACE_SECONDS * m.zone.scale && nearest !== this.target) nearest = null;
+    if (this.passive) nearest = null; // test helper: bots that never start a fight
     if (nearest) {
       if (this.target !== nearest) {
         this.target = nearest;
@@ -281,6 +289,11 @@ export class Bot {
 
     const armed = this.hasGun();
     const dist = Math.sqrt(nearestD);
+    if (nearest && p.inv.grenade > 0 && dist > 8 && dist < 15 && t - this.seenAt > 1 && m.rnd() < 0.07) {
+      // Lob a grenade: pick the low arc that lands at the target's distance.
+      const k = Math.min(1, (20 * dist) / (THROW_SPEED * THROW_SPEED));
+      m.throwItem(p, 'grenade', Math.atan2(-(nearest.s.x - s.x), -(nearest.s.z - s.z)), 0.5 * Math.asin(k) - 0.18);
+    }
     if (this.target && armed) this.chooseWeapon(this.targetVisible ? dist : 25);
     else if (!armed && p.inv.active !== Inv.SLOT_MELEE) m.switchSlot(p, Inv.SLOT_MELEE);
 

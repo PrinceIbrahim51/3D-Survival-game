@@ -314,6 +314,30 @@ function lootGeometry(kind) {
       box(-0.12, 0.1, -0.115, 0.12, 0.24, -0.1, 0x2a333c);
       break;
     }
+    case 'throw':
+      if (info.throw === 'grenade') {
+        box(-0.09, 0, -0.09, 0.09, 0.2, 0.09, 0x3f5a2e);
+        box(-0.05, 0.2, -0.05, 0.05, 0.26, 0.05, 0x2a2a2a);
+        box(0.02, 0.2, -0.02, 0.12, 0.23, 0.02, 0xc9c9c9);
+      } else {
+        box(-0.08, 0, -0.08, 0.08, 0.26, 0.08, 0x9aa3a8);
+        box(-0.085, 0.09, -0.085, 0.085, 0.15, 0.085, 0x3f8efc);
+        box(-0.04, 0.26, -0.04, 0.04, 0.31, 0.04, 0x2a2a2a);
+      }
+      break;
+    case 'att':
+      if (kind === 'att_mag') {
+        box(-0.04, 0, -0.07, 0.04, 0.3, 0.07, 0x2b2d31);
+        box(-0.045, 0.24, -0.075, 0.045, 0.3, 0.075, 0xc58cff);
+      } else if (kind === 'att_scope') {
+        box(-0.05, 0.06, -0.2, 0.05, 0.16, 0.2, 0x2b2d31);
+        box(-0.065, 0.045, -0.24, 0.065, 0.175, -0.18, 0xc58cff);
+        box(-0.025, 0, -0.06, 0.025, 0.06, 0.06, 0x2b2d31);
+      } else {
+        box(-0.035, 0, -0.035, 0.035, 0.22, 0.035, 0x2b2d31);
+        box(-0.05, 0.22, -0.1, 0.05, 0.27, 0.1, 0xc58cff);
+      }
+      break;
     case 'pack': {
       const c = info.level === 2 ? 0x4e6b3a : 0x8a6a40;
       const s = info.level === 2 ? 1.2 : 1;
@@ -327,7 +351,7 @@ function lootGeometry(kind) {
   return b.build();
 }
 
-const GLOW = { weapon: 0xffb23e, ammo: 0xd8e06a, heal: 0x7dffa0, armor: 0x7ab8ff, pack: 0xd9a066 };
+const GLOW = { weapon: 0xffb23e, ammo: 0xd8e06a, heal: 0x7dffa0, armor: 0x7ab8ff, pack: 0xd9a066, throw: 0xff7a5c, att: 0xc58cff };
 
 // Draws every loot item on the ground with one instanced mesh per item kind.
 export class LootView {

@@ -59,6 +59,35 @@ export class Effects {
     }
     this.puffIdx = 0;
 
+    // Thrown grenades in flight.
+    const ngeo = new THREE.IcosahedronGeometry(0.1, 1);
+    this.nadeMats = { grenade: new THREE.MeshLambertMaterial({ color: 0x3f5a2e }), smoke: new THREE.MeshLambertMaterial({ color: 0x9aa3a8 }) };
+    this.nadePool = [];
+    for (let i = 0; i < 10; i++) {
+      const m = new THREE.Mesh(ngeo, this.nadeMats.grenade);
+      m.visible = false;
+      m.castShadow = true;
+      scene.add(m);
+      this.nadePool.push(m);
+    }
+
+    // Explosion fireball.
+    this.blasts = [];
+    const bgeo = new THREE.IcosahedronGeometry(1, 2);
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.Mesh(bgeo, new THREE.MeshBasicMaterial({
+        color: 0xffb347, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+      }));
+      m.visible = false;
+      scene.add(m);
+      this.blasts.push({ mesh: m, life: 0 });
+    }
+    this.blastIdx = 0;
+
+    // Smoke clouds: clusters of large soft blobs.
+    this.smokeGeo = new THREE.IcosahedronGeometry(1, 1);
+    this.clouds = [];
+
     // Zone wall: tall open cylinder with a scrolling energy texture.
     const canvas = document.createElement('canvas');
     canvas.width = 64;
@@ -134,6 +163,48 @@ export class Effects {
     p.vy = rise;
   }
 
+  takeNade(kind) {
+    const m = this.nadePool.find((x) => !x.visible);
+    if (!m) return null;
+    m.material = this.nadeMats[kind] || this.nadeMats.grenade;
+    m.visible = true;
+    return m;
+  }
+
+  explosion(pos) {
+    const b = this.blasts[this.blastIdx];
+    this.blastIdx = (this.blastIdx + 1) % this.blasts.length;
+    b.mesh.position.copy(pos);
+    b.mesh.scale.setScalar(0.6);
+    b.mesh.visible = true;
+    b.life = 0.32;
+    this.flashLight.position.copy(pos).setY(pos.y + 1);
+    this.flashLight.intensity = 90;
+    for (let i = 0; i < 9; i++) {
+      tmp.set((Math.random() - 0.5) * 3.5, Math.random() * 1.6, (Math.random() - 0.5) * 3.5).add(pos);
+      this.puff(tmp, i < 3 ? 0xffa64d : 0x4a4640, 0.5 + Math.random() * 0.5, 0.7 + Math.random() * 0.7, 1.2);
+    }
+  }
+
+  smoke(pos, radius, seconds) {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshLambertMaterial({ color: 0xc9ced1, transparent: true, opacity: 0, depthWrite: false });
+    for (let i = 0; i < 16; i++) {
+      const m = new THREE.Mesh(this.smokeGeo, mat);
+      const a = (i / 16) * Math.PI * 2;
+      const d = i < 4 ? 0 : radius * (0.3 + Math.random() * 0.45);
+      const s = radius * (0.38 + Math.random() * 0.22);
+      m.position.set(Math.cos(a) * d, s * (0.55 + Math.random() * 0.5), Math.sin(a) * d);
+      m.scale.set(s, s * 0.85, s);
+      m.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+      group.add(m);
+    }
+    group.position.copy(pos);
+    group.renderOrder = 4;
+    this.scene.add(group);
+    this.clouds.push({ group, mat, age: 0, life: seconds });
+  }
+
   setZone(circle, time) {
     const r = Math.max(0.01, circle.r);
     this.zone.visible = circle.r > 0.5;
@@ -157,7 +228,26 @@ export class Effects {
       f.mesh.material.opacity = Math.max(0, f.life / 0.05);
       if (f.life <= 0) f.mesh.visible = false;
     }
-    if (this.flashLight.intensity > 0) this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 220);
+    if (this.flashLight.intensity > 0) this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * (this.flashLight.intensity > 20 ? 320 : 220));
+    for (const b of this.blasts) {
+      if (b.life <= 0) continue;
+      b.life -= dt;
+      b.mesh.scale.addScalar(dt * 22);
+      b.mesh.material.opacity = Math.max(0, b.life / 0.32) * 0.85;
+      if (b.life <= 0) b.mesh.visible = false;
+    }
+    for (let i = this.clouds.length - 1; i >= 0; i--) {
+      const c = this.clouds[i];
+      c.age += dt;
+      // Billow in, hang, then thin out.
+      c.mat.opacity = Math.min(1, c.age / 1.2, (c.life - c.age) / 2.5) * 0.92;
+      c.group.rotation.y += dt * 0.05;
+      if (c.age >= c.life) {
+        this.scene.remove(c.group);
+        c.mat.dispose();
+        this.clouds.splice(i, 1);
+      }
+    }
     for (const p of this.puffs) {
       if (p.life <= 0) continue;
       p.life -= dt;
