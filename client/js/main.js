@@ -15,7 +15,7 @@ const $ = (id) => document.getElementById(id);
 const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
 // ------------------------------------------------------------------ settings
-const defaults = { sens: 1, vol: 0.7, quality: isTouch ? 'low' : 'medium', invert: false, name: '', room: '' };
+const defaults = { sens: 1, vol: 0.7, quality: isTouch ? 'low' : 'medium', invert: false, name: '', room: '', team: 1 };
 let settings = { ...defaults };
 try {
   settings = { ...defaults, ...JSON.parse(localStorage.getItem('pls-settings') || '{}') };
@@ -159,7 +159,10 @@ async function join(mode) {
   $('conn').textContent = '';
   // ?spawn=x,z,yaw only has an effect on servers started with DEBUG_SPAWN=1.
   const dbg = new URLSearchParams(location.search).get('spawn');
-  net.send({ t: 'join', name: settings.name, mode, room: settings.room, spawn: dbg ? dbg.split(',').map(Number) : undefined });
+  net.send({
+    t: 'join', name: settings.name, mode, room: settings.room, team: settings.team,
+    spawn: dbg ? dbg.split(',').map(Number) : undefined,
+  });
   if (isTouch) {
     // Phones: go fullscreen landscape when the browser allows it.
     const el = document.documentElement;
@@ -175,6 +178,17 @@ $('room').value = settings.room;
 $('play-quick').addEventListener('click', () => join('quick'));
 $('play-practice').addEventListener('click', () => join('practice'));
 $('play-room').addEventListener('click', () => join('room'));
+$('play-watch').addEventListener('click', () => join('watch'));
+// Solo / Duo / Squad.
+const teamButtons = Array.from(document.querySelectorAll('#teamsize button'));
+function setTeamSize(n) {
+  settings.team = n === 2 || n === 4 ? n : 1;
+  for (const b of teamButtons) b.classList.toggle('on', Number(b.dataset.team) === settings.team);
+  saveSettings();
+}
+for (const b of teamButtons) b.addEventListener('click', () => setTeamSize(Number(b.dataset.team)));
+setTeamSize(settings.team);
+const TEAM_NAMES = { 1: 'Solo', 2: 'Duo', 4: 'Squad' };
 $('name').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') join('quick');
 });
@@ -269,11 +283,12 @@ net.on('lobby', (m) => {
   if (app.screen !== 'lobby') setScreen('lobby');
   app.ready = m.ready;
   const titles = { quick: 'Quick Match', practice: 'Practice', room: 'Private Room ' + (m.room || '') };
-  $('lobby-title').textContent = titles[m.mode] || 'Lobby';
+  $('lobby-title').textContent = (titles[m.mode] || 'Lobby') + ' - ' + (TEAM_NAMES[m.teamSize] || 'Solo');
   const humans = m.players.length;
-  $('lobby-sub').textContent = m.mode === 'practice'
-    ? `You against ${m.fillTo - 1} bots.`
-    : `${humans} of ${m.max} players${m.bots ? ', bots fill up to ' + m.fillTo : ''}. Ready up to start sooner.`;
+  const teamNote = m.teamSize > 1 ? ` Teams of ${m.teamSize}; players who join together share a team.` : '';
+  $('lobby-sub').textContent = (m.mode === 'practice'
+    ? 'You and bots against bots.'
+    : `${humans} of ${m.max} players${m.bots ? ', bots fill the empty seats' : ''}. Ready up to start sooner.`) + teamNote;
   $('lobby-count').textContent = m.startsIn === null ? 'Waiting for another player' : m.startsIn > 0 ? 'Starts in ' + m.startsIn : 'Starting...';
   const list = $('lobby-players');
   list.textContent = '';
@@ -304,6 +319,8 @@ net.on('start', (m) => {
   if (view) {
     input.yaw = view[0];
     input.pitch = view[1];
+  } else if (m.watching) {
+    hud.announce('Watching a live match', 3000);
   } else if (!m.resume && !isTouch && !input.locked) {
     hud.announce('Click to look around. Steer your parachute with WASD', 5000);
   }
@@ -316,10 +333,17 @@ net.on('s', (m) => {
 net.on('dead', (m) => {
   if (!app.game) return;
   $('death-place').textContent = '';
-  $('death-place').append('#' + m.place);
-  const small = document.createElement('small');
-  small.textContent = ' of ' + m.total;
-  $('death-place').append(small);
+  if (m.place > 0) {
+    $('death-place').append('#' + m.place);
+    const small = document.createElement('small');
+    small.textContent = ' of ' + m.total + (m.teamMode ? ' teams' : '');
+    $('death-place').append(small);
+  } else {
+    // Out, but the team is still in the match.
+    const small = document.createElement('small');
+    small.textContent = 'Your team is still fighting. Watch them!';
+    $('death-place').append(small);
+  }
   $('death-by').textContent = m.killer ? `${m.killer} got you ${causeText(m.cause)}` : m.cause === 'zone' ? 'The zone got you.' : 'You are out.';
   $('death-stats').textContent = `${m.kills} kill${m.kills === 1 ? '' : 's'}  -  ${m.damage} damage dealt`;
   $('pause').classList.add('hidden');
@@ -340,7 +364,11 @@ net.on('end', (m) => {
   input.unlock();
   const banner = $('banner');
   banner.querySelector('h1').textContent = won ? 'VICTORY' : 'MATCH OVER';
-  banner.querySelector('p').textContent = won ? 'You are the last one standing!' : (m.winner ? m.winner.name + ' is the last one standing' : '');
+  const team = m.teamSize > 1;
+  const winners = m.winner ? (team ? m.winner.names.join(', ') : m.winner.name) : '';
+  banner.querySelector('p').textContent = won
+    ? (team ? 'Your team is the last one standing!' : 'You are the last one standing!')
+    : (winners ? winners + (team ? ' are' : ' is') + ' the last standing' : '');
   banner.classList.remove('hidden');
   audio.ui(won ? 'win' : 'click');
   clearTimeout(app.resultTimer);
@@ -349,17 +377,18 @@ net.on('end', (m) => {
     endGame();
     setScreen('result');
     const title = $('result-title');
-    title.textContent = won ? 'VICTORY' : m.you ? `#${m.you.place} of ${m.total}` : 'Match over';
+    title.textContent = won ? 'VICTORY' : m.you ? `#${m.you.place} of ${m.total}${team ? ' teams' : ''}` : 'Match over';
     title.className = won ? 'good' : '';
     $('result-sub').textContent = m.you
-      ? `${m.you.kills} kill${m.you.kills === 1 ? '' : 's'}  -  ${m.you.damage} damage dealt` + (won ? '' : m.winner ? `  -  winner: ${m.winner.name}` : '')
+      ? `${m.you.kills} kill${m.you.kills === 1 ? '' : 's'}  -  ${m.you.damage} damage dealt` + (won ? '' : winners ? `  -  winner: ${winners}` : '')
       : '';
     const body = document.querySelector('#result-table tbody');
     body.textContent = '';
     for (const r of m.rows) {
       const tr = document.createElement('tr');
       if (m.you && r.id === m.you.id) tr.classList.add('me');
-      const cells = [r.place, r.name, r.kills, r.damage];
+      if (team && m.you && r.team === m.you.team) tr.classList.add('mate');
+      const cells = [r.place, (team ? 'T' + r.team + '  ' : '') + r.name, r.kills, r.damage];
       cells.forEach((c, i) => {
         const td = document.createElement('td');
         td.textContent = c;

@@ -2,7 +2,7 @@
 // game ships without any binary art assets.
 
 import * as THREE from 'three';
-import { GeoBuilder } from './scene.js';
+import { GeoBuilder, vehicleGeometry } from './scene.js';
 import { WEAPON_KINDS, ITEMS, AMMO } from '/shared/items.js';
 
 const lambert = new Map();
@@ -66,6 +66,57 @@ function weaponGeometry(kind) {
 const weaponGeo = {};
 for (const k of WEAPON_KINDS) weaponGeo[k] = weaponGeometry(k);
 export const MUZZLE_LENGTH = { pistol: 0.2, smg: 0.5, ar: 0.78, shotgun: 0.82, sniper: 1.05 };
+
+// ------------------------------------------------------------------ vehicles
+
+const wreckMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, color: 0x3a3632 });
+
+// A drivable vehicle. The model faces +X; game yaw 0 faces -Z, hence the offset.
+export function createVehicleView(type, variant) {
+  const mesh = new THREE.Mesh(vehicleGeometry(type, variant), vertexMat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  const root = new THREE.Group();
+  root.add(mesh);
+  mesh.rotation.y = Math.PI / 2;
+  return {
+    root,
+    set(x, y, z, yaw) {
+      root.position.set(x, y, z);
+      root.rotation.y = yaw;
+    },
+    setWrecked(on) {
+      mesh.material = on ? wreckMat : vertexMat;
+    },
+    dispose() {
+      mesh.geometry.dispose();
+      if (root.parent) root.parent.remove(root);
+    },
+  };
+}
+
+// A floating name label, used for team-mates.
+export function createNameTag(text, color = '#7dffa0') {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.font = '700 34px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.strokeText(text, 128, 32);
+  ctx.fillStyle = color;
+  ctx.fillText(text, 128, 32);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, fog: false }));
+  sprite.scale.set(2.4, 0.6, 1);
+  sprite.position.y = 2.25;
+  sprite.renderOrder = 10;
+  return sprite;
+}
 
 // --------------------------------------------------------------- characters
 
@@ -216,7 +267,39 @@ export function createCharacter(id) {
       c.crouchK += ((st.crouch ? 1 : 0) - c.crouchK) * Math.min(1, dt * 12);
       const ck = c.crouchK;
 
-      chute.visible = st.chute;
+      chute.visible = !!st.chute;
+      if (st.seated) {
+        // Sitting in a vehicle: knees up, hands forward.
+        body.rotation.x = 0;
+        body.position.set(0, -0.42, 0);
+        torso.rotation.x = -0.08;
+        head.rotation.x = st.pitch * 0.4;
+        legL.rotation.x = 1.35;
+        legR.rotation.x = 1.35;
+        legL.scale.y = 0.8;
+        legR.scale.y = 0.8;
+        armL.rotation.set(1.1, 0, 0.2);
+        armR.rotation.set(1.1, 0, -0.2);
+        gunPivot.visible = !!st.armed;
+        gunPivot.rotation.x = st.pitch * 0.75;
+        return;
+      }
+      if (st.down) {
+        // Knocked down: on hands and knees, dragging forward.
+        const crawl = Math.sin(c.phase * 0.6) * 0.3 * moving;
+        body.rotation.x = -1.25;
+        body.position.set(0, 0.55, 0.45);
+        torso.rotation.x = 0.1;
+        head.rotation.x = 0.8;
+        armL.rotation.set(2.5 + crawl, 0, 0.4);
+        armR.rotation.set(2.5 - crawl, 0, -0.4);
+        legL.rotation.x = 0.25 - crawl;
+        legR.rotation.x = 0.25 + crawl;
+        legL.scale.y = 1;
+        legR.scale.y = 1;
+        gunPivot.visible = false;
+        return;
+      }
       if (st.chute) {
         legL.rotation.x = 0.25 + Math.sin(c.phase * 0.3) * 0.08;
         legR.rotation.x = 0.1 - Math.sin(c.phase * 0.3) * 0.08;

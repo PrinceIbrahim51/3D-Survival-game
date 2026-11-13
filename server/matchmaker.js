@@ -19,7 +19,7 @@ export class Matchmaker {
     };
     this.matches = new Set();
     this.rooms = new Map();
-    this.open = null; // the public match currently accepting players
+    this.open = new Map(); // team size -> public match currently accepting players
   }
 
   base() {
@@ -30,11 +30,22 @@ export class Matchmaker {
   // Returns an error string, or null on success.
   join(client, req) {
     if (client.match) client.match.removeClient(client);
-    const mode = req.mode === 'practice' || req.mode === 'room' ? req.mode : 'quick';
+    const mode = ['practice', 'room', 'watch'].includes(req.mode) ? req.mode : 'quick';
+    const teamSize = req.team === 2 || req.team === 4 ? req.team : 1;
     let match;
+    if (mode === 'watch') {
+      // Spectate the busiest match in progress.
+      let best = null;
+      for (const m of this.matches) {
+        if (m.state === 'playing' && (!best || m.aliveCount > best.aliveCount)) best = m;
+      }
+      if (!best) return 'No match is being played right now. Start one!';
+      best.addWatcher(client);
+      return null;
+    }
     if (mode === 'practice') {
       if (this.matches.size >= this.config.maxMatches) return 'Server is full, try again in a minute.';
-      match = new Match({ ...this.base(), mode, maxPlayers: 1, bots: true, lobbySeconds: 3 });
+      match = new Match({ ...this.base(), mode, teamSize, maxPlayers: 1, bots: true, lobbySeconds: 3 });
       this.matches.add(match);
     } else if (mode === 'room') {
       const code = String(req.room || '').trim().toUpperCase();
@@ -45,20 +56,22 @@ export class Matchmaker {
       if (!match) {
         if (this.matches.size >= this.config.maxMatches) return 'Server is full, try again in a minute.';
         match = new Match({
-          ...this.base(), mode, room: code, lobbySeconds: this.config.roomLobbySeconds,
+          ...this.base(), mode, room: code, teamSize, lobbySeconds: this.config.roomLobbySeconds,
           bots: this.config.bots && req.bots !== false,
         });
         this.matches.add(match);
         this.rooms.set(code, match);
       }
     } else {
-      if (!this.open || !this.open.canJoin()) {
+      match = this.open.get(teamSize);
+      if (!match || !match.canJoin()) {
         if (this.matches.size >= this.config.maxMatches) return 'Server is full, try again in a minute.';
-        this.open = new Match({ ...this.base(), mode, lobbySeconds: this.config.lobbySeconds });
-        this.matches.add(this.open);
+        match = new Match({ ...this.base(), mode, teamSize, lobbySeconds: this.config.lobbySeconds });
+        this.matches.add(match);
+        this.open.set(teamSize, match);
       }
-      match = this.open;
     }
+    if (this.onMatch) match.onResult = this.onMatch;
     match.addClient(client);
     return null;
   }
@@ -73,10 +86,10 @@ export class Matchmaker {
       m.update();
       if (m.state === 'closed') {
         this.matches.delete(m);
-        if (this.open === m) this.open = null;
+        if (this.open.get(m.teamSize) === m) this.open.delete(m.teamSize);
         if (m.opts.room && this.rooms.get(m.opts.room) === m) this.rooms.delete(m.opts.room);
       } else if (m.state !== 'waiting') {
-        if (this.open === m) this.open = null;
+        if (this.open.get(m.teamSize) === m) this.open.delete(m.teamSize);
       }
     }
   }

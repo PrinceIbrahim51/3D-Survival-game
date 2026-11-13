@@ -161,6 +161,52 @@ export class Hud {
     this.hurt = 1;
   }
 
+  // mates: [{ name, hp, state }] with state 0 fine, 1 knocked down, 2 out.
+  setTeam(mates) {
+    const key = JSON.stringify(mates);
+    if (this.cache.team === key) return;
+    this.cache.team = key;
+    const panel = $('teampanel');
+    panel.classList.toggle('hidden', mates.length === 0);
+    panel.textContent = '';
+    for (const mate of mates) {
+      const row = document.createElement('div');
+      row.className = 'mate' + (mate.state === 1 ? ' down' : mate.state === 2 ? ' dead' : '');
+      const name = document.createElement('span');
+      name.textContent = mate.name + (mate.state === 1 ? '  (down)' : '');
+      const bar = document.createElement('div');
+      const fill = document.createElement('i');
+      fill.style.width = Math.max(0, Math.min(100, mate.hp)) + '%';
+      bar.append(fill);
+      row.append(name, bar);
+      panel.append(row);
+    }
+  }
+
+  // info: null, or { name, kmh, hp }.
+  setVehicle(info) {
+    this.set('vehinfo', 'hidden', !info);
+    if (!info) return;
+    this.set('vehname', 'text', info.name);
+    this.set('vehspeed', 'text', String(info.kmh));
+    this.set('vehbar', 'width', info.hp + '%');
+  }
+
+  setDowned(text) {
+    this.set('downed', 'hidden', !text);
+    if (text) this.set('downedtext', 'text', text);
+  }
+
+  // Touch-only action button next to the crosshair (drive, get out, revive).
+  setUseButton(label) {
+    const key = label || '';
+    if (this.cache.useBtn === key) return;
+    this.cache.useBtn = key;
+    const el = $('t-use');
+    el.classList.toggle('hidden', !label);
+    if (label) el.textContent = label;
+  }
+
   setCrosshair(gap, visible) {
     const g = Math.round(gap);
     if (this.cache.gap !== g) {
@@ -185,7 +231,7 @@ export class Hud {
     this.cache.prompt = cacheKey;
     el.classList.toggle('hidden', !text);
     const pick = $('t-pickup');
-    if (pick) pick.classList.toggle('hidden', !text);
+    if (pick) pick.classList.toggle('hidden', !text || key === 'E');
     if (!text) return;
     el.textContent = '';
     if (key) {
@@ -259,12 +305,26 @@ export class Hud {
         ctx.fillText(p.name, px(p.x), px(p.z - p.r * 0.75));
       }
     }
+    if (view.vehicles) {
+      ctx.fillStyle = '#f2f2f2';
+      ctx.strokeStyle = '#222';
+      ctx.lineWidth = 1;
+      const q = Math.max(3, size / 75);
+      for (const o of view.vehicles) {
+        ctx.fillRect(px(o.x) - q / 2, px(o.z) - q / 2, q, q);
+        ctx.strokeRect(px(o.x) - q / 2, px(o.z) - q / 2, q, q);
+      }
+    }
     if (others) {
-      ctx.fillStyle = '#ffd24a';
+      // Team-mates.
+      ctx.strokeStyle = '#0b2a14';
+      ctx.lineWidth = Math.max(1, size / 240);
       for (const o of others) {
+        ctx.fillStyle = o.down ? '#ff9b21' : '#5dff8a';
         ctx.beginPath();
-        ctx.arc(px(o.x), px(o.z), size / 90, 0, Math.PI * 2);
+        ctx.arc(px(o.x), px(o.z), size / 70, 0, Math.PI * 2);
         ctx.fill();
+        ctx.stroke();
       }
     }
     if (me) {
@@ -321,6 +381,8 @@ export function causeText(cause) {
   if (cause === 'left') return 'left the match';
   if (cause === 'fists') return 'knocked out';
   if (cause === 'grenade') return 'blew up';
+  if (cause === 'vehicle') return 'ran over';
+  if (cause === 'bleed') return 'bled out';
   const w = WEAPONS[cause];
   return w ? `[${w.name}]` : 'eliminated';
 }

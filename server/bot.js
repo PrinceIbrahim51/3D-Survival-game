@@ -244,7 +244,8 @@ export class Bot {
     const fx = -Math.sin(this.yaw);
     const fz = -Math.cos(this.yaw);
     for (const q of m.players.values()) {
-      if (q === p || !q.alive || q.s.chute) continue;
+      // Team-mates are not targets, and a downed enemy is left to bleed out.
+      if (q === p || !q.alive || q.s.chute || q.team === p.team || q.downed) continue;
       const dx = q.s.x - s.x;
       const dz = q.s.z - s.z;
       const d2 = dx * dx + dz * dz;
@@ -297,6 +298,20 @@ export class Bot {
     if (this.target && armed) this.chooseWeapon(this.targetVisible ? dist : 25);
     else if (!armed && p.inv.active !== Inv.SLOT_MELEE) m.switchSlot(p, Inv.SLOT_MELEE);
 
+    // --- helping a downed team-mate up -----------------------------------------
+    this.mate = null;
+    if (m.teamSize > 1 && !this.targetVisible && !p.reviving) {
+      for (const q of m.teams.get(p.team)) {
+        if (q === p || !q.alive || !q.downed) continue;
+        const d2 = (q.s.x - s.x) ** 2 + (q.s.z - s.z) ** 2;
+        if (d2 < 45 * 45) {
+          this.mate = q;
+          if (d2 < 2 * 2) m.startRevive(p, q);
+          break;
+        }
+      }
+    }
+
     // --- healing -------------------------------------------------------------
     if (!p.heal && !this.targetVisible) {
       if (p.hp < 45 && p.inv.medkit > 0) m.startHeal(p, 'medkit');
@@ -311,7 +326,11 @@ export class Bot {
     const outsideNext = !insideCircle({ x: next.x, z: next.z, r: next.r * 0.9 }, s.x, s.z);
     const closingSoon = zone.mode === 'shrink' || zone.t1 - m.time < 25000 * zone.scale;
 
-    if (outsideNow || (outsideNext && closingSoon)) {
+    if (p.reviving) {
+      this.setGoal(null); // stay put until the team-mate is up
+    } else if (this.mate && !outsideNow) {
+      this.setGoal({ x: this.mate.s.x, z: this.mate.s.z });
+    } else if (outsideNow || (outsideNext && closingSoon)) {
       this.setGoal(this.zonePoint());
     } else if (this.target && armed) {
       if (!this.targetVisible && this.lastSeen) this.setGoal({ x: this.lastSeen.x, z: this.lastSeen.z });
@@ -403,6 +422,26 @@ export class Bot {
       return inp;
     }
 
+    if (p.downed) {
+      // Crawl toward the nearest standing team-mate and hope for a revive.
+      let best = null;
+      let bd = Infinity;
+      for (const q of m.teams.get(p.team)) {
+        if (q === p || !q.alive || q.downed) continue;
+        const d2 = (q.s.x - s.x) ** 2 + (q.s.z - s.z) ** 2;
+        if (d2 < bd) {
+          bd = d2;
+          best = q;
+        }
+      }
+      if (best && bd > 2.5) {
+        this.yaw = Math.atan2(-(best.s.x - s.x), -(best.s.z - s.z));
+        inp.mz = 1;
+      }
+      inp.yaw = this.yaw;
+      inp.pitch = 0;
+      return inp;
+    }
     if (t >= this.thinkAt) {
       this.think(t);
       this.thinkAt = t + 0.22 + m.rnd() * 0.1;

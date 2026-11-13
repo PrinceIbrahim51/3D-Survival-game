@@ -104,6 +104,11 @@ h2.good { color: var(--accent); }
 .buttons.row { grid-template-columns: 1fr 1fr; margin-top: 16px; }
 .buttons button { text-align: left; font-size: 17px; }
 .buttons.row button { text-align: center; }
+.buttons.slim { margin-top: 10px; }
+.buttons.slim button { font-size: 14px; padding: 9px 10px; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 9px 6px; font-size: 14px; background: rgba(0, 0, 0, 0.25); }
+.seg button.on { background: var(--accent2); color: #06231f; }
 .room { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 10px; }
 .room input { margin-top: 0; text-transform: uppercase; }
 .error { color: var(--bad); min-height: 18px; margin: 10px 0 0; font-size: 14px; }
@@ -130,6 +135,7 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 #result-table th:first-child, #result-table td:first-child { width: 36px; }
 #result-table th:nth-child(3), #result-table td:nth-child(3) { width: 56px; }
 #result-table th:nth-child(4), #result-table td:nth-child(4) { width: 76px; }
+#result-table tr.mate td { color: #9df0b0; }
 #result-table tr.me td { color: var(--accent); font-weight: 700; }
 #result-table td i { font-style: normal; color: var(--dim); font-size: 11px; margin-left: 6px; }
 
@@ -244,6 +250,24 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 .slot.empty { opacity: 0.45; }
 .slot.active .wammo { font-size: 20px; }
 
+#teampanel { position: absolute; left: calc(12px + var(--safe-l)); top: calc(150px + var(--safe-t)); display: flex; flex-direction: column; gap: 5px; width: 150px; }
+#teampanel .mate { background: rgba(13, 27, 36, 0.6); border-radius: 8px; padding: 4px 8px 6px; font-size: 12px; font-weight: 700; }
+#teampanel .mate span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9df0b0; }
+#teampanel .mate div { height: 5px; background: rgba(255, 255, 255, 0.2); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+#teampanel .mate i { display: block; height: 100%; background: var(--hp); }
+#teampanel .mate.down span { color: var(--accent); }
+#teampanel .mate.down i { background: var(--bad); }
+#teampanel .mate.dead { opacity: 0.45; }
+#teampanel .mate.dead span { color: var(--dim); text-decoration: line-through; }
+#vehinfo { position: absolute; left: 50%; bottom: calc(118px + var(--safe-b)); transform: translateX(-50%); background: rgba(13, 27, 36, 0.7); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; font-size: 14px; font-weight: 700; text-align: center; min-width: 170px; }
+#vehinfo b { color: var(--accent); margin-right: 8px; }
+#vehinfo .bar { height: 6px; margin-top: 4px; }
+#vehinfo .bar i { background: #c9ced1; }
+#vehinfo small { display: block; font-weight: 500; font-size: 11px; color: var(--dim); margin-top: 2px; }
+body.touch #vehinfo small { display: none; }
+#downed { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 24vh; background: radial-gradient(ellipse at center, rgba(60, 0, 0, 0.15) 30%, rgba(60, 0, 0, 0.6) 100%); text-align: center; }
+#downed h2 { color: var(--bad); font-size: clamp(22px, 4vw, 36px); margin: 0; }
+#downed p { margin: 6px 0 0; font-size: 15px; font-weight: 700; }
 #spectate { position: absolute; left: 50%; bottom: calc(18px + var(--safe-b)); transform: translateX(-50%); display: flex; gap: 10px; align-items: center; background: rgba(13, 27, 36, 0.75); border-radius: 12px; padding: 8px 12px; font-size: 14px; white-space: nowrap; }
 #spectate b { color: var(--accent); }
 #spectate button { padding: 6px 10px; font-size: 13px; }
@@ -267,6 +291,7 @@ body.touch #spectate button small { display: none; }
 #t-jump { right: calc(18px + var(--safe-r)); bottom: calc(150px + var(--safe-b)); width: 56px; height: 56px; }
 #t-crouch { right: calc(88px + var(--safe-r)); bottom: calc(160px + var(--safe-b)); width: 50px; height: 50px; font-size: 9px; }
 #t-reload { right: calc(120px + var(--safe-r)); bottom: calc(26px + var(--safe-b)); width: 52px; height: 52px; font-size: 9px; }
+#t-use { left: 50%; top: 52%; margin-left: -162px; width: 66px; height: 66px; background: rgba(43, 196, 180, 0.8); color: #06231f; border-color: #fff; }
 #t-pickup { left: 50%; top: 52%; margin-left: 96px; width: 66px; height: 66px; background: rgba(255, 155, 33, 0.75); color: #23160a; border-color: #fff; }
 
 /* Compact HUD for phones and small windows; leaves room for thumbs. */
@@ -284,6 +309,9 @@ body.compact #packinfo { display: none; }
 body.compact #prompt { top: 54%; }
 body.compact #counters .small { display: none; }
 body.compact #killfeed { font-size: 11px; max-width: 34vw; }
+body.compact #teampanel { top: calc(84px + var(--safe-t)); width: 112px; }
+body.compact #teampanel .mate { padding: 2px 6px 4px; font-size: 10px; }
+body.compact #vehinfo { bottom: calc(112px + var(--safe-b)); font-size: 12px; padding: 4px 10px; }
 body.compact #zoneinfo { font-size: 12px; min-width: 150px; padding: 4px 10px 6px; }
 
 @media (max-height: 430px) {

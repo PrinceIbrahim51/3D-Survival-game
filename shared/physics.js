@@ -52,13 +52,26 @@ function headBlocked(world, s) {
   return false;
 }
 
+// A knocked-down player can only crawl. Server and client both pass their
+// input through this before stepping.
+const downedScratch = { mx: 0, mz: 0, yaw: 0, b: 0 };
+export function downedInput(inp) {
+  downedScratch.mx = inp.mx * 0.45;
+  downedScratch.mz = inp.mz * 0.45;
+  downedScratch.yaw = inp.yaw;
+  downedScratch.b = BTN.CROUCH;
+  return downedScratch;
+}
+
 // True when the player is deep enough in water to be swimming.
 export function isSwimming(world, s) {
   return s.y < SEA_LEVEL - 0.7 && world.heightAt(s.x, s.z) < SEA_LEVEL - 0.7;
 }
 
 // Advances one player by dt seconds using input { mx, mz, yaw, b }.
-export function stepPlayer(world, s, inp, dt) {
+// obstacles: optional array of upright cylinders { x, z, r, y0, y1 } (vehicles)
+// that block movement in addition to the static world.
+export function stepPlayer(world, s, inp, dt, obstacles) {
   const b = inp.b;
   let mx = inp.mx;
   let mz = inp.mz;
@@ -156,6 +169,24 @@ export function stepPlayer(world, s, inp, dt) {
   if (ledge && (b & BTN.JUMP) && !s.chute && !s.crouch && !swimming && s.vy < MANTLE_SPEED) {
     s.vy = MANTLE_SPEED;
     s.ground = false;
+  }
+  if (obstacles) {
+    for (let i = 0; i < obstacles.length; i++) {
+      const o = obstacles[i];
+      if (o.y1 <= lo || o.y0 >= hi) continue;
+      const dx = nx - o.x;
+      const dz = nz - o.z;
+      const rr = R + o.r;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= rr * rr) continue;
+      if (d2 > 1e-10) {
+        const d = Math.sqrt(d2);
+        nx += (dx / d) * (rr - d);
+        nz += (dz / d) * (rr - d);
+      } else {
+        nx += rr;
+      }
+    }
   }
   const lim = WORLD_HALF - WORLD_MARGIN;
   if (nx < -lim) nx = -lim; else if (nx > lim) nx = lim;
@@ -299,6 +330,22 @@ function rayTerrain(world, ox, oy, oz, dx, dy, dz, maxDist) {
 export function raycastWorld(world, ox, oy, oz, dx, dy, dz, maxDist) {
   const t = rayBoxes(world, ox, oy, oz, dx, dy, dz, maxDist);
   return rayTerrain(world, ox, oy, oz, dx, dy, dz, t);
+}
+
+// Ray vs an upright cylinder (side surface only). Returns the distance or Infinity.
+export function rayCylinder(ox, oy, oz, dx, dy, dz, maxDist, cx, cz, r, y0, y1) {
+  const lx = ox - cx;
+  const lz = oz - cz;
+  const a = dx * dx + dz * dz;
+  if (a < 1e-9) return Infinity;
+  const b = lx * dx + lz * dz;
+  const c = lx * lx + lz * lz - r * r;
+  const disc = b * b - a * c;
+  if (disc < 0) return Infinity;
+  const t = (-b - Math.sqrt(disc)) / a;
+  if (t < 0 || t >= maxDist) return Infinity;
+  const y = oy + dy * t;
+  return y >= y0 && y <= y1 ? t : Infinity;
 }
 
 // Ray vs a standing player. Returns { t, part } with part 'head' | 'body' |

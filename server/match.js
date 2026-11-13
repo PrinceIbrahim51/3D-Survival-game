@@ -4,15 +4,20 @@
 
 import { getWorld, WORLD_SEED } from '../shared/world.js';
 import {
-  stepPlayer, makeMoveState, raycastWorld, rayPlayer, floorAt, stepProjectile, projectileBlocked,
+  stepPlayer, makeMoveState, raycastWorld, rayPlayer, rayCylinder, floorAt, stepProjectile, projectileBlocked,
+  downedInput,
 } from '../shared/physics.js';
 import {
   TICK_DT, TICK_MS, INPUT_DT, BTN, BTN_MASK, PF, MAX_HP, PICKUP_RADIUS, INTERACT_RADIUS,
   MAX_REWIND_MS, CHUTE_ALTITUDE, CHUTE_FALL, eyeHeight, dirFromAngles,
+  DOWN_HP, BLEED_SECONDS, REVIVE_SECONDS, REVIVE_HP, REVIVE_RANGE,
 } from '../shared/constants.js';
 import {
+  VEHICLES, ENTER_RADIUS, makeVehicleState, stepVehicle, seatPosition, vehicleCircles,
+} from '../shared/vehicle.js';
+import {
   WEAPONS, WEAPON_KINDS, MELEE, HEAL, ITEMS, SWAP_TIME, BLOOM_DECAY, rollLoot, defaultAmount,
-  ammoItemKind, THROW, THROW_SPEED, THROW_COOLDOWN, bloomScale,
+  ammoItemKind, THROW, THROW_SPEED, THROW_COOLDOWN, bloomScale, damageFalloff,
 } from '../shared/items.js';
 import { createZone, startZone, updateZone, zoneCircleAt, insideCircle } from '../shared/zone.js';
 import * as Inv from './inventory.js';
@@ -27,6 +32,11 @@ const MAX_QUEUE = 30;
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const NEUTRAL = { mx: 0, mz: 0, b: 0 };
+const seatTmp = {};
+const circleTmp = [];
+
+export { DOWN_HP, BLEED_SECONDS, REVIVE_SECONDS, REVIVE_HP, REVIVE_RANGE };
 
 class Player {
   constructor(id, name, client) {
@@ -60,6 +70,17 @@ class Player {
     this.hist = [];
     this.events = [];
     this.lastState = '';
+    this.team = 0;
+    this.skin = client && Array.isArray(client.skin) ? client.skin : null;
+    this.pid = client ? client.pid || null : null;
+    this.downed = false;
+    this.downedBy = null;
+    this.downCause = null;
+    this.reviving = null; // { target, end }
+    this.veh = null; // vehicle being driven or ridden
+    this.seat = -1;
+    this.ranOverAt = 0;
+    this.diedTick = 0;
   }
 }
 
@@ -69,6 +90,7 @@ export class Match {
     this.opts = {
       mode: 'quick',
       room: null,
+      teamSize: 1, // 1 solo, 2 duo, 4 squad
       maxPlayers: 16,
       fillTo: 12,
       bots: true,
@@ -97,6 +119,11 @@ export class Match {
     this.zone = createZone(this.opts.zoneScale);
     this.circle = { x: 0, z: 0, r: this.zone.from.r };
     this.events = [];
+    this.teamSize = Math.max(1, this.opts.teamSize | 0);
+    this.teamsAlive = 0;
+    this.vehicles = new Map();
+    this.obstacles = []; // collision circles of all vehicles, rebuilt every tick
+    this.onResult = null; // set by the server to record finished matches
     this.projectiles = []; // thrown grenades in flight
     this.smokes = []; // active smoke clouds: { x, y, z, r, until }
     this.nextProjId = 1;
@@ -169,6 +196,7 @@ export class Match {
       c.send({
         t: 'lobby', mode: this.opts.mode, room: this.opts.room, players, startsIn,
         max: this.opts.maxPlayers, bots: this.opts.bots, fillTo: this.opts.fillTo, you: c.name, ready: c.ready,
+        teamSize: this.teamSize,
       });
     }
   }
@@ -214,8 +242,11 @@ export class Match {
       this.players.set(p.id, p);
     }
     if (this.opts.bots) {
+      // Team modes need at least two full teams.
+      const size = this.teamSize;
+      const fill = Math.ceil(Math.max(this.opts.fillTo, size > 1 ? size * 2 : 2, this.players.size) / size) * size;
       const names = BOT_NAMES.slice();
-      while (this.players.size < this.opts.fillTo) {
+      while (this.players.size < fill) {
         const i = Math.floor(this.rnd() * names.length);
         const name = names.splice(i, 1)[0] || 'Bot ' + this.nextPlayerId;
         const p = new Player(this.nextPlayerId++, name, null);
@@ -225,50 +256,74 @@ export class Match {
     this.total = this.players.size;
     this.aliveCount = this.total;
 
-    const spawns = this.pickSpawns(this.total);
-    let i = 0;
+    // Teams are filled in join order (humans first), so friends who entered
+    // a lobby together end up on the same team. Solo: everyone is their own team.
+    this.teams = new Map();
+    let n = 0;
     for (const p of this.players.values()) {
+      p.team = this.teamSize > 1 ? Math.floor(n / this.teamSize) + 1 : p.id;
+      n++;
+      if (!this.teams.has(p.team)) this.teams.set(p.team, []);
+      this.teams.get(p.team).push(p);
+    }
+    this.teamsAlive = this.teams.size;
+    this.teamPlace = new Map();
+
+    const spawns = this.pickSpawns(this.teams.size);
+    let i = 0;
+    for (const members of this.teams.values()) {
       const sp = spawns[i++];
-      p.s.x = sp.x;
-      p.s.z = sp.z;
-      p.s.y = Math.max(0, this.world.heightAt(sp.x, sp.z)) + CHUTE_ALTITUDE;
-      p.s.vy = -CHUTE_FALL;
-      p.s.chute = true;
-      // Face the middle of the island.
-      p.yaw = Math.atan2(sp.x, sp.z);
-      // Development aid (server started with DEBUG_SPAWN=1): put a human
-      // straight on the ground at a requested spot.
-      const dbg = !p.bot && p.client.debugSpawn;
-      if (dbg) {
-        p.s.x = dbg[0];
-        p.s.z = dbg[1];
-        p.s.y = floorAt(this.world, dbg[0], dbg[1], 500);
-        p.s.vy = 0;
-        p.s.chute = false;
-        p.yaw = dbg[2] || 0;
-      }
-      if (p.bot) p.ai = new Bot(this, p);
+      members.forEach((p, k) => {
+        // Team-mates drop side by side.
+        p.s.x = sp.x + (k % 2) * 5 - (members.length > 1 ? 2.5 : 0);
+        p.s.z = sp.z + Math.floor(k / 2) * 5;
+        p.s.y = Math.max(0, this.world.heightAt(p.s.x, p.s.z)) + CHUTE_ALTITUDE;
+        p.s.vy = -CHUTE_FALL;
+        p.s.chute = true;
+        // Face the middle of the island.
+        p.yaw = Math.atan2(p.s.x, p.s.z);
+        // Development aid (server started with DEBUG_SPAWN=1): put a human
+        // straight on the ground at a requested spot.
+        const dbg = !p.bot && p.client.debugSpawn;
+        if (dbg) {
+          p.s.x = dbg[0];
+          p.s.z = dbg[1];
+          p.s.y = floorAt(this.world, dbg[0], dbg[1], 500);
+          p.s.vy = 0;
+          p.s.chute = false;
+          p.yaw = dbg[2] || 0;
+        }
+        if (p.bot) p.ai = new Bot(this, p);
+      });
     }
 
+    this.spawnVehicles();
     this.spawnLoot();
     startZone(this.zone, 0, this.rnd, this.world.isLand);
     zoneCircleAt(this.zone, 0, this.circle);
-
     for (const c of this.clients.values()) c.send(this.startMessage(c, false));
   }
 
   // Everything a client needs to (re)build the match on its side.
   startMessage(client, resume) {
-    const p = client.player;
+    const p = client.player; // null for someone watching the match
     const roster = [];
-    for (const q of this.players.values()) roster.push([q.id, q.name, q.bot ? 1 : 0]);
+    for (const q of this.players.values()) roster.push([q.id, q.name, q.bot ? 1 : 0, q.team, q.skin]);
     const loot = [];
     for (const it of this.loot.values()) loot.push([it.id, it.kind, r2(it.x), r2(it.y), r2(it.z), it.n, it.a]);
     const smokes = this.smokes.map((k) => [k.x, k.y, k.z, r2((k.until - this.time) / 1000)]);
+    const veh = [];
+    for (const v of this.vehicles.values()) {
+      veh.push([
+        v.id, v.type, r2(v.s.x), r2(v.s.y), r2(v.s.z), r3(v.s.yaw), Math.ceil((v.hp / v.def.hp) * 100), v.dead ? 1 : 0,
+        v.seats.map((q) => (q ? q.id : 0)), v.variant,
+      ]);
+    }
     return {
-      t: 'start', you: p.id, seed: this.opts.seed, total: this.total, players: roster, loot,
-      zone: this.zone, spawn: [p.s.x, p.s.y, p.s.z, p.yaw], mode: this.opts.mode,
-      resume, alive: p.alive, seq: p.lastSeq, chute: p.s.chute, smokes,
+      t: 'start', you: p ? p.id : 0, seed: this.opts.seed, total: this.total, players: roster, loot,
+      zone: this.zone, spawn: p ? [p.s.x, p.s.y, p.s.z, p.yaw] : [0, 40, 0, 0], mode: this.opts.mode,
+      resume, alive: p ? p.alive : false, seq: p ? p.lastSeq : 0, chute: p ? p.s.chute : false, smokes, veh,
+      team: p ? p.team : 0, teamSize: this.teamSize, teams: this.teams.size, watching: !p,
     };
   }
 
@@ -276,14 +331,263 @@ export class Match {
   resync(client) {
     if (this.state === 'waiting') {
       this.sendLobby();
-    } else if (this.state === 'playing' && client.player) {
-      client.player.lastState = '';
+    } else if (this.state === 'playing') {
+      if (client.player) client.player.lastState = '';
       client.send(this.startMessage(client, true));
-      if (!client.player.alive) client.send(this.deadMessage(client.player));
+      if (client.player && !client.player.alive) client.send(this.deadMessage(client.player));
     } else if (this.state === 'ended') {
       client.send(this.endMessage(client));
     } else {
       client.send({ t: 'idle' });
+    }
+  }
+
+  // Lets a client watch this match without taking part.
+  addWatcher(client) {
+    client.match = this;
+    client.player = null;
+    client.ready = false;
+    this.clients.set(client.id, client);
+    client.send(this.startMessage(client, false));
+  }
+
+  // --------------------------------------------------------------- vehicles
+
+  spawnVehicles() {
+    let id = 1;
+    for (const sp of this.world.vehicleSpawns) {
+      const def = VEHICLES[sp.type];
+      this.vehicles.set(id, {
+        id, type: sp.type, def, s: makeVehicleState(sp.x, this.world.heightAt(sp.x, sp.z), sp.z, sp.yaw),
+        hp: def.hp, seats: new Array(def.seats).fill(null), dead: false, dirty: 0, variant: r2(sp.v),
+      });
+      id++;
+    }
+    this.rebuildObstacles();
+  }
+
+  rebuildObstacles() {
+    let i = 0;
+    for (const v of this.vehicles.values()) i = vehicleCircles(v.def, v.s, this.obstacles, i);
+    this.obstacles.length = i;
+  }
+
+  // Moves a seated player along with their vehicle.
+  seatPlayer(p) {
+    const v = p.veh;
+    seatPosition(v.def, v.s, p.seat, seatTmp);
+    const s = p.s;
+    s.x = seatTmp.x;
+    s.y = seatTmp.y - 0.45;
+    s.z = seatTmp.z;
+    s.vx = -Math.sin(v.s.yaw) * v.s.speed;
+    s.vz = -Math.cos(v.s.yaw) * v.s.speed;
+    s.vy = 0;
+    s.ground = true;
+    s.crouch = false;
+    s.chute = false;
+  }
+
+  // "Use" key: get out, help a team-mate up, or get into the nearest vehicle.
+  use(p) {
+    if (p.s.chute || p.downed) return;
+    if (p.veh) {
+      this.exitVehicle(p);
+      return;
+    }
+    if (this.teamSize > 1) {
+      for (const q of this.teams.get(p.team)) {
+        if (q === p || !q.alive || !q.downed) continue;
+        const d2 = (q.s.x - p.s.x) ** 2 + (q.s.z - p.s.z) ** 2;
+        if (d2 <= REVIVE_RANGE * REVIVE_RANGE && Math.abs(q.s.y - p.s.y) < 2) {
+          this.startRevive(p, q);
+          return;
+        }
+      }
+    }
+    let best = null;
+    let bestD = ENTER_RADIUS * ENTER_RADIUS;
+    for (const v of this.vehicles.values()) {
+      if (v.dead || !v.seats.includes(null) || Math.abs(v.s.y - p.s.y) > 2.5) continue;
+      // Distance to the nearer of the two body circles, so long vehicles can
+      // be boarded from either end.
+      vehicleCircles(v.def, v.s, circleTmp, 0);
+      for (let k = 0; k < 2; k++) {
+        const d2 = (circleTmp[k].x - p.s.x) ** 2 + (circleTmp[k].z - p.s.z) ** 2 - v.def.radius * v.def.radius;
+        if (d2 < bestD) {
+          bestD = d2;
+          best = v;
+        }
+      }
+    }
+    if (!best) return;
+    const seat = best.seats.indexOf(null);
+    best.seats[seat] = p;
+    best.dirty = this.tick;
+    p.veh = best;
+    p.seat = seat;
+    p.heal = null;
+    p.reloadEnd = 0;
+    p.reviving = null;
+    this.seatPlayer(p);
+    this.events.push(['vin', best.id, p.id, seat]);
+  }
+
+  exitVehicle(p) {
+    const v = p.veh;
+    if (!v) return;
+    v.seats[p.seat] = null;
+    v.dirty = this.tick;
+    p.veh = null;
+    p.seat = -1;
+    // Step out to the side; try a few spots until one is free of walls.
+    const yaw = v.s.yaw;
+    const rx = Math.cos(yaw);
+    const rz = -Math.sin(yaw);
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const side = v.def.radius + 0.75;
+    const along = v.def.offset;
+    const spots = [[side, 0], [-side, 0], [side, along], [-side, along], [side, -along], [-side, -along], [0, -(along + side + 0.4)], [0, along + side + 0.4]];
+    let x = v.s.x + rx * side;
+    let z = v.s.z + rz * side;
+    for (const [r, f] of spots) {
+      const cx = v.s.x + rx * r + fx * f;
+      const cz = v.s.z + rz * r + fz * f;
+      const fy = floorAt(this.world, cx, cz, v.s.y + 1.2);
+      if (Math.abs(fy - v.s.y) > 1.6) continue;
+      // Nothing solid between the vehicle and the spot at chest height.
+      const dx = cx - v.s.x;
+      const dz = cz - v.s.z;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      if (raycastWorld(this.world, v.s.x, v.s.y + 1.1, v.s.z, dx / d, 0, dz / d, d + 0.4) < d + 0.4) continue;
+      x = cx;
+      z = cz;
+      break;
+    }
+    const s = p.s;
+    s.x = x;
+    s.z = z;
+    s.y = floorAt(this.world, x, z, v.s.y + 1.2);
+    s.vx = s.vy = s.vz = 0;
+    s.ground = false;
+    this.events.push(['vout', v.id, p.id]);
+  }
+
+  damageVehicle(v, amount, attacker) {
+    if (v.dead || !(amount > 0)) return;
+    v.hp -= amount;
+    v.dirty = this.tick;
+    if (v.hp > 0) return;
+    v.hp = 0;
+    v.dead = true;
+    v.s.speed = 0;
+    for (const q of v.seats.slice()) if (q) this.exitVehicle(q);
+    this.events.push(['vd', v.id]);
+    this.explode({ id: -v.id, x: v.s.x, y: v.s.y + 0.4, z: v.s.z, owner: attacker }, 'vehicle', 95, 7);
+  }
+
+  // Nearest point where a ray hits the vehicle's body, or Infinity.
+  rayVehicle(v, ox, oy, oz, d, maxT) {
+    vehicleCircles(v.def, v.s, circleTmp, 0);
+    let t = Infinity;
+    for (let k = 0; k < 2; k++) {
+      const c = circleTmp[k];
+      const tk = rayCylinder(ox, oy, oz, d.x, d.y, d.z, maxT, c.x, c.z, c.r, v.s.y, c.y1);
+      if (tk < t) t = tk;
+    }
+    return t;
+  }
+
+  updateVehicles() {
+    for (const v of this.vehicles.values()) {
+      if (v.dead) continue;
+      const driver = v.seats[0];
+      // A vehicle nobody is driving rolls to a stop.
+      if (!driver && Math.abs(v.s.speed) > 0.02) {
+        stepVehicle(this.world, v.def, v.s, NEUTRAL, TICK_DT);
+        v.dirty = this.tick;
+      }
+      for (const q of v.seats) if (q) this.seatPlayer(q);
+      const speed = Math.abs(v.s.speed);
+      if (!driver || speed < 5) continue;
+      // Running people over: check the end of the vehicle that leads.
+      const sign = v.s.speed > 0 ? 1 : -1;
+      const cx = v.s.x - Math.sin(v.s.yaw) * v.def.offset * sign;
+      const cz = v.s.z - Math.cos(v.s.yaw) * v.def.offset * sign;
+      const reach = v.def.radius + 0.55;
+      for (const q of this.players.values()) {
+        if (!q.alive || q.veh || q.team === driver.team || this.time < q.ranOverAt) continue;
+        if ((q.s.x - cx) ** 2 + (q.s.z - cz) ** 2 > reach * reach || Math.abs(q.s.y - v.s.y) > 2) continue;
+        q.ranOverAt = this.time + 800;
+        this.damage(q, (speed - 3) * 7, driver, 'vehicle', false, v.s);
+        v.s.speed *= 0.75;
+      }
+    }
+    this.rebuildObstacles();
+  }
+
+  // ------------------------------------------------------------------ teams
+
+  hasStandingMate(p) {
+    if (this.teamSize <= 1) return false;
+    for (const q of this.teams.get(p.team)) if (q !== p && q.alive && !q.downed) return true;
+    return false;
+  }
+
+  knock(victim, attacker, cause) {
+    victim.downed = true;
+    victim.hp = DOWN_HP;
+    victim.downedBy = attacker && attacker !== victim ? attacker : null;
+    victim.downCause = cause;
+    victim.heal = null;
+    victim.reloadEnd = 0;
+    victim.reviving = null;
+    if (victim.veh) this.exitVehicle(victim);
+    this.events.push(['down', victim.downedBy ? victim.downedBy.id : 0, victim.id, cause]);
+  }
+
+  startRevive(p, mate) {
+    p.reviving = { target: mate, end: p.clock + REVIVE_SECONDS };
+    p.heal = null;
+    p.reloadEnd = 0;
+  }
+
+  updateRevive(p, inp) {
+    const r = p.reviving;
+    const q = r.target;
+    const far = (q.s.x - p.s.x) ** 2 + (q.s.z - p.s.z) ** 2 > (REVIVE_RANGE + 0.5) ** 2;
+    if (!q.alive || !q.downed || far || (inp.b & BTN.FIRE)) {
+      p.reviving = null;
+      return;
+    }
+    if (p.clock >= r.end) {
+      q.downed = false;
+      q.hp = REVIVE_HP;
+      q.downedBy = null;
+      p.reviving = null;
+      this.events.push(['up', p.id, q.id]);
+    }
+  }
+
+  beingRevived(p) {
+    for (const q of this.teams.get(p.team)) if (q.reviving && q.reviving.target === p) return true;
+    return false;
+  }
+
+  // A team with nobody left standing is out: anyone still down goes with it.
+  checkTeam(team) {
+    const members = this.teams ? this.teams.get(team) : null;
+    if (!members) return;
+    let standing = false;
+    let alive = false;
+    for (const q of members) {
+      if (!q.alive) continue;
+      alive = true;
+      if (!q.downed) standing = true;
+    }
+    if (alive && !standing) {
+      for (const q of members) if (q.alive) this.kill(q, q.downedBy, q.downCause || 'bleed');
     }
   }
 
@@ -435,10 +739,14 @@ export class Match {
   onAction(client, msg) {
     const p = client.player;
     if (!p || !p.alive || this.state !== 'playing') return;
+    if (p.downed) return; // knocked down: nothing but crawling
     switch (msg.a) {
+      case 'use':
+        this.use(p);
+        break;
       case 'pickup': {
         const it = this.loot.get(msg.id | 0);
-        if (!it || p.s.chute) return;
+        if (!it || p.s.chute || p.veh) return;
         const dx = it.x - p.s.x;
         const dz = it.z - p.s.z;
         if (dx * dx + dz * dz > INTERACT_RADIUS * INTERACT_RADIUS || Math.abs(it.y - p.s.y) > 2.5) return;
@@ -452,7 +760,7 @@ export class Match {
         this.startHeal(p, msg.k);
         break;
       case 'drop': {
-        if (p.s.chute) return;
+        if (p.s.chute || p.veh) return;
         const d = Inv.dropActive(p.inv);
         if (d) {
           this.addLoot(d.kind, p.s.x, floorAt(this.world, p.s.x, p.s.z, p.s.y + 0.2), p.s.z, d.n, p, false, d.a);
@@ -490,6 +798,19 @@ export class Match {
       p.s.chute = false;
     }
     if (msg.calm) for (const q of this.players.values()) if (q.ai) q.ai.passive = true;
+    if (Number.isFinite(msg.hurt)) this.damage(p, msg.hurt, null, 'zone', false);
+    if (msg.veh) {
+      // Park a free vehicle of the given type right next to the player.
+      const v = [...this.vehicles.values()].find((x) => x.type === msg.veh && !x.dead && !x.seats.some(Boolean));
+      if (v) {
+        v.s.x = p.s.x + 2.4;
+        v.s.z = p.s.z;
+        v.s.y = this.world.heightAt(v.s.x, v.s.z);
+        v.s.yaw = p.yaw;
+        v.s.speed = 0;
+        v.dirty = this.tick;
+      }
+    }
   }
 
   switchSlot(p, slot) {
@@ -503,7 +824,7 @@ export class Match {
 
   startHeal(p, kind) {
     const def = HEAL[kind];
-    if (!def || !p.alive || p.s.chute || p.heal) return false;
+    if (!def || !p.alive || p.s.chute || p.heal || p.downed) return false;
     if (p.inv[kind] <= 0 || p.hp >= def.upTo) return false;
     p.heal = { kind, end: p.clock + def.time };
     p.reloadEnd = 0;
@@ -516,7 +837,19 @@ export class Match {
     p.yaw = inp.yaw;
     p.pitch = inp.pitch;
     p.btn = inp.b;
-    stepPlayer(this.world, p.s, inp, dt);
+    if (p.veh) {
+      const v = p.veh;
+      if (p.seat === 0 && !v.dead) {
+        const lost = stepVehicle(this.world, v.def, v.s, inp, dt);
+        v.dirty = this.tick;
+        if (lost > 6) this.damageVehicle(v, (lost - 6) * 9, null); // hard crash
+      }
+      if (p.veh) this.seatPlayer(p);
+    } else if (p.downed) {
+      stepPlayer(this.world, p.s, downedInput(inp), dt, this.obstacles);
+    } else {
+      stepPlayer(this.world, p.s, inp, dt, this.obstacles);
+    }
     p.clock += dt;
     if (p.bloom > 0) p.bloom = Math.max(0, p.bloom - BLOOM_DECAY * dt);
 
@@ -532,9 +865,11 @@ export class Match {
       }
       p.heal = null;
     }
-    if (p.s.chute) return;
+    if (p.s.chute || p.downed || !p.alive) return;
+    if (p.reviving) this.updateRevive(p, inp);
     if (inp.b & BTN.RELOAD) this.tryReload(p);
-    if (inp.b & BTN.FIRE) this.tryFire(p, inp);
+    // The driver has their hands full; passengers can shoot.
+    if ((inp.b & BTN.FIRE) && !(p.veh && p.seat === 0)) this.tryFire(p, inp);
   }
 
   tryReload(p) {
@@ -609,6 +944,7 @@ export class Match {
     const rt = clamp(inp.rt ?? this.time, this.time - MAX_REWIND_MS, this.time);
     const ev = ['shot', p.id, WEAPON_KINDS.indexOf(kind)];
     const hits = new Map();
+    const vehHits = new Map();
     const tmp = {};
     for (let i = 0; i < def.pellets; i++) {
       const d = spreadDirection(dir, deg, this.rnd);
@@ -630,24 +966,43 @@ export class Match {
           part = h.part;
         }
       }
+      // Vehicle bodies stop bullets, except for a hit on someone riding in that vehicle.
+      let hitVeh = null;
+      for (const v of this.vehicles.values()) {
+        if (v === p.veh || (victim && victim.veh === v)) continue;
+        const ex = v.s.x - ox;
+        const ez = v.s.z - oz;
+        const reach = t + v.def.offset + v.def.radius;
+        if (ex * ex + ez * ez > reach * reach) continue;
+        const tv = this.rayVehicle(v, ox, oy, oz, d, t);
+        if (tv < t) {
+          t = tv;
+          hitVeh = v;
+          victim = null;
+        }
+      }
       if (victim) {
         what = 2;
         const e = hits.get(victim) || { dmg: 0, head: false };
         e.dmg += bulletDamage(def, t, part);
         if (part === 'head') e.head = true;
         hits.set(victim, e);
+      } else if (hitVeh) {
+        what = 3;
+        if (!hitVeh.dead) vehHits.set(hitVeh, (vehHits.get(hitVeh) || 0) + def.dmg * damageFalloff(def, t) * 0.5);
       }
       ev.push(r2(ox + d.x * t), r2(oy + d.y * t), r2(oz + d.z * t), what);
     }
     this.events.push(ev);
     for (const [victim, e] of hits) this.damage(victim, e.dmg, p, kind, e.head);
+    for (const [v, dmg] of vehHits) this.damageVehicle(v, dmg, p);
   }
 
   // Throws a grenade or smoke along the given aim (with a slight upward arc).
   throwItem(p, kind, yaw, pitch) {
     const def = THROW[kind];
     if (!def || !p.alive || p.s.chute || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return false;
-    if (p.inv[kind] <= 0 || p.clock < p.nextThrow) return false;
+    if (p.inv[kind] <= 0 || p.clock < p.nextThrow || p.downed || (p.veh && p.seat === 0)) return false;
     p.inv[kind]--;
     p.nextThrow = p.clock + THROW_COOLDOWN;
     p.heal = null;
@@ -693,22 +1048,28 @@ export class Match {
     this.projectiles = live;
   }
 
-  explode(proj) {
-    const def = THROW.grenade;
+  // A blast at proj's position. Used for grenades and for vehicles blowing up.
+  explode(proj, cause = 'grenade', dmg = THROW.grenade.dmg, radius = THROW.grenade.radius) {
     this.events.push(['boom', proj.id, r2(proj.x), r2(proj.y), r2(proj.z)]);
     const ox = proj.x;
     const oy = proj.y + 0.3;
     const oz = proj.z;
-    for (const q of this.players.values()) {
+    for (const q of Array.from(this.players.values())) {
       if (!q.alive) continue;
       const dx = q.s.x - ox;
       const dy = q.s.y + (q.s.crouch ? 0.6 : 1.0) - oy;
       const dz = q.s.z - oz;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (d > def.radius) continue;
+      if (d > radius) continue;
       // Walls and terrain shield from the blast.
       if (d > 0.4 && raycastWorld(this.world, ox, oy, oz, dx / d, dy / d, dz / d, d) < d - 0.4) continue;
-      this.damage(q, def.dmg * (1 - d / def.radius), proj.owner, 'grenade', false, proj);
+      this.damage(q, dmg * (1 - d / radius), proj.owner || null, cause, false, proj);
+    }
+    if (cause === 'grenade') {
+      for (const v of this.vehicles.values()) {
+        const d = Math.sqrt((v.s.x - ox) ** 2 + (v.s.z - oz) ** 2);
+        if (d < radius) this.damageVehicle(v, 260 * (1 - d / radius), proj.owner);
+      }
     }
   }
 
@@ -750,37 +1111,54 @@ export class Match {
   // from: optional { x, z } the damage came from (defaults to the attacker).
   damage(victim, amount, attacker, cause, head, from = null) {
     if (!victim.alive || !(amount > 0)) return;
+    const self = attacker === victim;
+    // No friendly fire in team modes (you can still hurt yourself).
+    if (attacker && !self && attacker.team === victim.team) return;
     const t = { hp: victim.hp, armor: victim.inv.armor };
-    const lost = applyDamage(t, amount, cause === 'zone');
+    const lost = applyDamage(t, amount, cause === 'zone' || victim.downed);
     victim.hp = t.hp;
     victim.inv.armor = t.armor;
     if (t.armor <= 0) victim.inv.armorLvl = 0;
-    const killed = victim.hp <= 0;
-    const self = attacker === victim;
+    const out = victim.hp <= 0;
+    // Out of health: knocked down if a team-mate can still help, otherwise eliminated.
+    const knocked = out && !victim.downed && this.hasStandingMate(victim);
     if (attacker && !self) {
       attacker.damage += amount;
-      attacker.events.push(['hit', victim.id, Math.round(amount), head ? 1 : 0, killed ? 1 : 0]);
+      attacker.events.push(['hit', victim.id, Math.round(amount), head ? 1 : 0, out ? (knocked ? 2 : 1) : 0]);
       if (victim.ai) victim.ai.onHurt(attacker);
     }
     const src = from || (attacker && !self ? attacker.s : null);
     if (src) victim.events.push(['dmg', Math.round(lost), r2(src.x), r2(src.z)]);
-    if (killed) this.kill(victim, self ? null : attacker, cause);
+    if (!out) return;
+    if (knocked) this.knock(victim, self ? null : attacker, cause);
+    else this.kill(victim, victim.downed ? victim.downedBy || (self ? null : attacker) : self ? null : attacker, cause);
   }
 
   kill(victim, attacker, cause) {
     if (!victim.alive) return;
     victim.alive = false;
     victim.hp = 0;
+    victim.downed = false;
+    victim.diedTick = this.tick;
     victim.queue.length = 0;
     victim.heal = null;
     victim.reloadEnd = 0;
+    victim.reviving = null;
     victim.killer = attacker ? attacker.name : null;
     victim.cause = cause;
+    if (victim.veh) {
+      victim.veh.seats[victim.seat] = null;
+      victim.veh.dirty = this.tick;
+      this.events.push(['vout', victim.veh.id, victim.id]);
+      victim.veh = null;
+      victim.seat = -1;
+    }
     this.aliveCount--;
     if (attacker && attacker !== victim) attacker.kills++;
     this.events.push(['kill', attacker ? attacker.id : 0, victim.id, cause]);
     this.dropAll(victim);
     this.deadThisTick.push(victim);
+    this.checkTeam(victim.team);
   }
 
   step() {
@@ -809,46 +1187,73 @@ export class Match {
       }
     }
 
+    this.updateVehicles();
     this.updateProjectiles();
     if (updateZone(this.zone, this.time, this.rnd, this.world.isLand)) this.events.push(['zone', this.zone]);
     zoneCircleAt(this.zone, this.time, this.circle);
     for (const p of this.players.values()) {
       if (!p.alive) continue;
-      if (!p.s.chute) this.autoPickup(p);
+      if (!p.s.chute && !p.downed && !p.veh) this.autoPickup(p);
       if (!insideCircle(this.circle, p.s.x, p.s.z)) this.damage(p, this.zone.dps * TICK_DT, null, 'zone', false);
+      // Bleeding out, unless a team-mate is helping.
+      if (p.alive && p.downed && !this.beingRevived(p)) {
+        p.hp -= (DOWN_HP / BLEED_SECONDS) * TICK_DT;
+        if (p.hp <= 0) this.kill(p, p.downedBy, p.downCause || 'bleed');
+      }
     }
 
     this.resolveDeaths();
 
     for (const p of this.players.values()) {
       if (!p.alive) continue;
-      p.hist.push({ t: this.time, x: p.s.x, y: p.s.y, z: p.s.z, crouch: p.s.crouch });
+      p.hist.push({ t: this.time, x: p.s.x, y: p.s.y, z: p.s.z, crouch: p.s.crouch || p.downed });
       if (p.hist.length > HISTORY_TICKS) p.hist.shift();
     }
 
     this.sendSnapshots();
-    if (this.aliveCount <= 1) this.end();
+    if (this.teamsAlive <= 1) this.end();
   }
 
-  // Assigns final places to everyone eliminated this tick. Players who fall in
-  // the same tick are ranked by kills, then damage (see rankSimultaneous).
+  // Works out final places. A team (in solo, a player) is placed when its last
+  // member is eliminated; teams that go out in the same tick are ranked by
+  // kills, then damage (see rankSimultaneous).
   resolveDeaths() {
     if (this.deadThisTick.length === 0) return;
-    const ranked = rankSimultaneous(this.deadThisTick);
-    ranked.forEach((p, i) => {
-      p.place = this.aliveCount + 1 + i;
+    const dead = this.deadThisTick;
+    this.deadThisTick = [];
+    const out = [];
+    for (const p of dead) {
+      if (this.teamPlace.has(p.team) || out.some((t) => t.id === p.team)) continue;
+      const members = this.teams.get(p.team);
+      if (members.some((q) => q.alive)) continue;
+      out.push({
+        id: p.team, members,
+        kills: members.reduce((a, q) => a + q.kills, 0),
+        damage: members.reduce((a, q) => a + q.damage, 0),
+      });
+    }
+    const ranked = rankSimultaneous(out);
+    this.teamsAlive -= ranked.length;
+    const tell = new Set(dead);
+    ranked.forEach((t, i) => {
+      const place = this.teamsAlive + 1 + i;
+      this.teamPlace.set(t.id, place);
+      for (const q of t.members) {
+        q.place = place;
+        tell.add(q);
+      }
     });
-    for (const p of ranked) {
+    for (const p of tell) {
       if (!p.client || p.place === 1) continue;
       p.client.send(this.deadMessage(p));
     }
-    this.deadThisTick.length = 0;
   }
 
+  // place 0 means "you are out, but your team is still playing".
   deadMessage(p) {
     return {
-      t: 'dead', place: p.place, total: this.total, killer: p.killer, cause: p.cause,
-      kills: p.kills, damage: Math.round(p.damage),
+      t: 'dead', place: p.place, total: this.teams.size, killer: p.killer, cause: p.cause,
+      kills: p.kills, damage: Math.round(p.damage), teamMode: this.teamSize > 1,
     };
   }
 
@@ -862,13 +1267,15 @@ export class Match {
     if (p.btn & BTN.SPRINT) f |= PF.SPRINT;
     if (p.reloadEnd) f |= PF.RELOAD;
     if (p.heal) f |= PF.HEAL;
+    if (p.veh) f |= PF.VEHICLE;
+    if (p.downed) f |= PF.DOWN;
     return f;
   }
 
   privateState(p) {
     const inv = p.inv;
     const w = Inv.activeWeapon(inv);
-    return JSON.stringify({
+    const st = {
       hp: Math.ceil(p.hp),
       ar: Math.ceil(inv.armor),
       al: inv.armorLvl,
@@ -883,7 +1290,18 @@ export class Match {
       rl: p.reloadEnd && w ? WEAPONS[w.kind].reload : 0,
       hl: p.heal ? p.heal.kind : 0,
       k: p.kills,
-    });
+      // [vehicle id, seat, vehicle health %]
+      veh: p.veh ? [p.veh.id, p.seat, Math.ceil((p.veh.hp / p.veh.def.hp) * 100)] : 0,
+    };
+    if (this.teamSize > 1) {
+      st.dn = p.downed ? (this.beingRevived(p) ? 2 : 1) : 0;
+      st.rv = p.reviving ? p.reviving.target.id : 0;
+      st.tm = [];
+      for (const q of this.teams.get(p.team)) {
+        if (q !== p) st.tm.push([q.id, q.alive ? Math.ceil(q.hp) : 0, q.alive ? (q.downed ? 1 : 0) : 2]);
+      }
+    }
+    return JSON.stringify(st);
   }
 
   sendSnapshots() {
@@ -894,7 +1312,15 @@ export class Match {
       arr.push([p.id, r2(p.s.x), r2(p.s.y), r2(p.s.z), r3(p.yaw), r3(p.pitch), this.flagsOf(p), w ? WEAPON_KINDS.indexOf(w.kind) : -1]);
     }
     const shared = JSON.stringify(arr);
-    const head = '{"t":"s","n":' + this.tick + ',"tm":' + r2(this.time) + ',"al":' + this.aliveCount;
+    // Only vehicles that moved or changed lately are worth sending.
+    const veh = [];
+    for (const v of this.vehicles.values()) {
+      if (v.dirty >= this.tick - 12) {
+        veh.push([v.id, r2(v.s.x), r2(v.s.y), r2(v.s.z), r3(v.s.yaw), r2(v.s.speed), Math.ceil((v.hp / v.def.hp) * 100)]);
+      }
+    }
+    const head = '{"t":"s","n":' + this.tick + ',"tm":' + r2(this.time) + ',"al":' + this.aliveCount + ',"tl":' + this.teamsAlive
+      + (veh.length ? ',"v":' + JSON.stringify(veh) : '');
     for (const c of this.clients.values()) {
       const p = c.player;
       let msg = head;
@@ -903,6 +1329,11 @@ export class Match {
         if (p.alive) {
           const s = p.s;
           msg += ',"a":' + p.ack + ',"me":' + JSON.stringify([s.x, s.y, s.z, s.vx, s.vy, s.vz, this.flagsOf(p)]);
+          // The driver predicts the vehicle, so they get its exact state.
+          if (p.veh && p.seat === 0) {
+            const v = p.veh.s;
+            msg += ',"mv":' + JSON.stringify([v.x, v.y, v.z, v.yaw, v.speed]);
+          }
           const st = this.privateState(p);
           if (st !== p.lastState) {
             msg += ',"st":' + st;
@@ -921,31 +1352,42 @@ export class Match {
   end() {
     if (this.state !== 'playing') return;
     this.state = 'ended';
+    // The winning team still has someone alive; if everyone fell in the same
+    // tick it is the team ranked first.
+    let winTeam = null;
+    for (const p of this.players.values()) if (p.alive) winTeam = p.team;
+    if (winTeam === null) {
+      for (const [team, place] of this.teamPlace) if (place === 1) winTeam = team;
+    }
     let winner = null;
-    for (const p of this.players.values()) {
-      if (p.alive) winner = p;
+    if (winTeam !== null) {
+      this.teamPlace.set(winTeam, 1);
+      const members = this.teams.get(winTeam);
+      for (const q of members) q.place = 1;
+      winner = members.find((q) => q.alive) || members.slice().sort((a, b) => b.kills - a.kills)[0];
     }
-    if (!winner) {
-      for (const p of this.players.values()) if (p.place === 1) winner = p;
-    }
-    if (winner) winner.place = 1;
+    this.winTeam = winTeam;
     this.winner = winner;
     for (const c of this.clients.values()) c.send(this.endMessage(c));
     this.endAt = Date.now() + this.opts.endSeconds * 1000;
+    if (this.onResult) this.onResult(this);
   }
 
   endMessage(client) {
     const winner = this.winner;
     const p = client.player;
     const rows = Array.from(this.players.values())
-      .sort((a, b) => a.place - b.place)
-      .map((q) => ({ id: q.id, name: q.name, bot: q.bot, place: q.place, kills: q.kills, damage: Math.round(q.damage) }));
+      .sort((a, b) => a.place - b.place || a.team - b.team || b.kills - a.kills)
+      .map((q) => ({ id: q.id, name: q.name, bot: q.bot, place: q.place, kills: q.kills, damage: Math.round(q.damage), team: q.team }));
     return {
       t: 'end',
-      winner: winner ? { id: winner.id, name: winner.name, bot: winner.bot } : null,
+      winner: winner
+        ? { id: winner.id, name: winner.name, bot: winner.bot, team: winner.team, names: this.teams.get(winner.team).map((q) => q.name) }
+        : null,
       rows,
-      you: p ? { id: p.id, place: p.place, kills: p.kills, damage: Math.round(p.damage) } : null,
-      total: this.total,
+      you: p ? { id: p.id, place: p.place, kills: p.kills, damage: Math.round(p.damage), team: p.team } : null,
+      total: this.teams.size,
+      teamSize: this.teamSize,
     };
   }
 }

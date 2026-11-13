@@ -44,6 +44,18 @@ export function buildNav(world) {
     const c = Math.floor(v + WORLD_HALF);
     return c < 0 ? 0 : c >= N ? N - 1 : c;
   };
+  // Parked vehicles are not part of the static world, but bots should still
+  // walk around where they start out.
+  for (const sp of world.vehicleSpawns || []) {
+    const rad = sp.type === 'lorry' ? 3.6 : 1.9;
+    for (let cz = cellOf(sp.z - rad); cz <= cellOf(sp.z + rad); cz++) {
+      for (let cx = cellOf(sp.x - rad); cx <= cellOf(sp.x + rad); cx++) {
+        const x = cx - WORLD_HALF + 0.5;
+        const z = cz - WORLD_HALF + 0.5;
+        if ((x - sp.x) * (x - sp.x) + (z - sp.z) * (z - sp.z) < rad * rad) walk[cz * N + cx] = 0;
+      }
+    }
+  }
   const isWalkable = (x, z) => walk[cellOf(z) * N + cellOf(x)] === 1;
 
   // Nearest walkable cell centre to (x, z), searching outward in rings.

@@ -68,6 +68,10 @@
       <button class="slot" data-slot="2"><b>3</b><span class="wname">Fists</span><em class="wammo"></em></button>
     </div>
 
+    <div id="teampanel" class="hidden"></div>
+    <div id="vehinfo" class="hidden"><b id="vehname"></b><span id="vehspeed">0</span> km/h<div class="bar"><i id="vehbar"></i></div><small>E to get out</small></div>
+    <div id="downed" class="hidden"><h2>KNOCKED DOWN</h2><p id="downedtext"></p></div>
+
     <div id="spectate" class="hidden">
       <span>Spectating <b id="specname"></b></span>
       <button id="specnext">Next player <small>(N)</small></button>
@@ -88,6 +92,7 @@
     <button class="tbtn" id="t-crouch">CROUCH</button>
     <button class="tbtn" id="t-reload">RELOAD</button>
     <button class="tbtn hidden" id="t-pickup">TAKE</button>
+    <button class="tbtn hidden" id="t-use">USE</button>
   </div>
 
   <div id="bigmap" class="hidden"><canvas id="bigmapcanvas" width="720" height="720"></canvas><p>Tap or press M to close</p></div>
@@ -100,6 +105,11 @@
       <label class="field">Player name
         <input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Enter a name">
       </label>
+      <div class="seg" id="teamsize" role="group" aria-label="Team size">
+        <button data-team="1" class="on">Solo</button>
+        <button data-team="2">Duo</button>
+        <button data-team="4">Squad</button>
+      </div>
       <div class="buttons">
         <button id="play-quick" class="primary">Quick Match<small>Join other players, bots fill empty seats</small></button>
         <button id="play-practice">Practice<small>Start right away against bots</small></button>
@@ -107,6 +117,10 @@
       <div class="room">
         <input id="room" maxlength="12" autocomplete="off" spellcheck="false" placeholder="Room code">
         <button id="play-room">Private Room</button>
+      </div>
+      <div class="buttons row slim">
+        <button id="play-watch">Watch a live match</button>
+        <button id="open-profile">Profile</button>
       </div>
       <p id="menu-error" class="error"></p>
       <p id="conn" class="conn"></p>
@@ -118,6 +132,7 @@
           <div><b>Shift</b> sprint</div><div><b>Space</b> jump</div>
           <div><b>C</b> crouch</div><div><b>R</b> reload</div>
           <div><b>1 2 3</b> weapons</div><div><b>F</b> pick up / swap</div>
+          <div><b>E</b> drive / get out</div><div><b>E</b> revive a team-mate</div>
           <div><b>4</b> bandage <b>5</b> med kit</div><div><b>G</b> drop weapon</div>
           <div><b>6</b> grenade <b>7</b> smoke</div><div>Hold <b>Space</b> at a ledge to climb</div>
           <div><b>M</b> map</div><div><b>Esc</b> menu</div>

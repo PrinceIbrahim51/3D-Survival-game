@@ -590,16 +590,18 @@ export function generateWorld(seed = WORLD_SEED) {
     addLoot((b.x0 + b.x1) / 2, b.top, (b.z0 + b.z1) / 2, 2);
   }
 
-  // --- Street props: painted lorries and auto-rickshaws ------------------------
+  // --- Parked vehicles: painted lorries and auto-rickshaws ---------------------
+  // These are spawn points; the match creates drivable vehicles there.
+  const vehicleSpawns = [];
+  const HALF_PI = 1.5707963267948966;
   function addVehicle(type, x, z, alongX) {
-    const y = heightAt(x, z);
-    const [len, wid, hgt] = type === 'lorry' ? [6.4, 2.4, 2.9] : [2.7, 1.4, 1.75];
+    const [len, wid] = type === 'lorry' ? [6.4, 2.6] : [2.9, 1.7];
     const hx = (alongX ? len : wid) / 2;
     const hz = (alongX ? wid : len) / 2;
-    if (!rectFree(x - hx, z - hz, x + hx, z + hz, 1.2)) return false;
+    if (!rectFree(x - hx, z - hz, x + hx, z + hz, 1.2) || heightAt(x, z) < 1) return false;
     claim(x - hx, z - hz, x + hx, z + hz);
-    addBox(x - hx, y - 0.5, z - hz, x + hx, y + hgt, z + hz, type, 0xffffff, 0);
-    decor.push({ t: type, x, y, z, ax: alongX ? 'x' : 'z', v: rnd() });
+    // yaw 0 faces -Z; -90 degrees faces +X.
+    vehicleSpawns.push({ type, x, z, yaw: alongX ? -HALF_PI : 0, v: rnd() });
     return true;
   }
   addVehicle('lorry', -22, 15.6, true);
@@ -612,6 +614,11 @@ export function generateWorld(seed = WORLD_SEED) {
   addVehicle('auto', 9, -22, false);
   addVehicle('auto', 62, 108, true);
   addVehicle('auto', -98, 46, false);
+  addVehicle('auto', 100, -30, false);
+  addVehicle('auto', 30, -88, true);
+  addVehicle('auto', -108, -52, false);
+  addVehicle('auto', -30, 122, true);
+  addVehicle('auto', 88, 84, false);
 
   // --- Supply camps in the wild -------------------------------------------------
   for (let a = 0, placed = 0; a < 300 && placed < 8; a++) {
@@ -766,6 +773,7 @@ export function generateWorld(seed = WORLD_SEED) {
     boxes,
     decor,
     lootSpawns,
+    vehicleSpawns,
     pois: POIS,
     roads: ROADS,
     fields: FIELDS,

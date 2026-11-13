@@ -38,6 +38,13 @@ export const CHUTE_ACCEL = 18;
 export const CHUTE_FALL = 9;
 
 export const MAX_HP = 100;
+// Team modes: a player whose health runs out is knocked down instead of
+// eliminated while a team-mate is still standing.
+export const DOWN_HP = 100;
+export const BLEED_SECONDS = 35; // time a downed player lasts without help
+export const REVIVE_SECONDS = 4;
+export const REVIVE_HP = 30;
+export const REVIVE_RANGE = 2.4;
 export const PICKUP_RADIUS = 1.5; // automatic pickup range
 export const INTERACT_RADIUS = 2.6; // manual pickup range
 export const INTERP_DELAY_MS = 100; // how far in the past remote players are drawn
@@ -63,6 +70,8 @@ export const PF = {
   SPRINT: 16,
   RELOAD: 32,
   HEAL: 64,
+  VEHICLE: 128,
+  DOWN: 256,
 };
 
 export function eyeHeight(crouch) {

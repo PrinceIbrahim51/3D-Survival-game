@@ -4,17 +4,21 @@
 
 import * as THREE from 'three';
 import {
-  stepPlayer, makeMoveState, copyMoveState, raycastWorld, rayPlayer, isSwimming, stepProjectile,
+  stepPlayer, makeMoveState, copyMoveState, raycastWorld, rayPlayer, isSwimming, stepProjectile, downedInput,
 } from '/shared/physics.js';
 import {
+  VEHICLES, ENTER_RADIUS, makeVehicleState, copyVehicleState, stepVehicle, seatPosition, vehicleCircles,
+} from '/shared/vehicle.js';
+import {
   BTN, PF, INPUT_DT, TICK_DT, INTERP_DELAY_MS, INTERACT_RADIUS, WALK_SPEED, EYE_HEIGHT, CROUCH_EYE_HEIGHT, dirFromAngles,
+  REVIVE_SECONDS, REVIVE_RANGE,
 } from '/shared/constants.js';
 import {
   WEAPONS, WEAPON_KINDS, MELEE, ITEMS, HEAL, THROW, SWAP_TIME, BLOOM_DECAY, AIR_SPREAD, adsZoom, recoilScale, bloomScale,
   adsSpreadScale,
 } from '/shared/items.js';
 import { zoneCircleAt, insideCircle } from '/shared/zone.js';
-import { createCharacter, LootView } from './models.js';
+import { createCharacter, createVehicleView, createNameTag, LootView } from './models.js';
 import { Effects } from './effects.js';
 import { causeText } from './hud.js';
 
@@ -23,6 +27,8 @@ const v1 = new THREE.Vector3();
 const v2 = new THREE.Vector3();
 const v3 = new THREE.Vector3();
 const round5 = (v) => Math.round(v * 1e5) / 1e5;
+const seatTmp = {};
+const circleTmp = [];
 
 function lerpAngle(a, b, t) {
   let d = b - a;
@@ -55,7 +61,26 @@ export class Game {
     this.total = start.total;
     this.aliveCount = start.total;
     this.names = new Map();
-    for (const [id, name, bot] of start.players) this.names.set(id, { name, bot: !!bot });
+    this.teamOf = new Map();
+    for (const [id, name, bot, team] of start.players) {
+      this.names.set(id, { name, bot: !!bot });
+      this.teamOf.set(id, team);
+    }
+    this.team = start.team || 0;
+    this.teamSize = start.teamSize || 1;
+    this.watching = !!start.watching;
+    this.teamsAlive = start.teams || 0;
+
+    // Vehicles. The one we drive is predicted locally; the rest are interpolated.
+    this.vehicles = new Map();
+    this.seatOf = new Map(); // player id -> vehicle
+    for (const a of start.veh || []) this.addVehicle(a);
+    this.obstacles = [];
+    this.myVeh = null;
+    this.mySeat = -1;
+    this.vs = makeVehicleState(0, 0, 0, 0);
+    this.vprev = makeVehicleState(0, 0, 0, 0);
+    this.vcorr = new THREE.Vector3();
     for (const [id, kind, x, y, z, n] of start.loot) this.loot.add(id, kind, x, y, z);
     this.lootN = new Map(start.loot.map((l) => [l[0], l[5]]));
 
@@ -111,6 +136,10 @@ export class Game {
     this.lastDeathPos = new THREE.Vector3();
 
     this.input.reset(start.spawn[3]);
+    this.hud.setTeam([]);
+    this.hud.setVehicle(null);
+    this.hud.setDowned(null);
+    this.hud.setUseButton(null);
     this.hud.setSpectate(null);
     this.hud.setPrompt(null);
     this.hud.stopProgress();
@@ -121,6 +150,21 @@ export class Game {
     } else if (!start.resume) {
       this.hud.announce('Steer your parachute and land near buildings to find gear', 5000);
     }
+  }
+
+  addVehicle(a) {
+    const [id, type, x, y, z, yaw, hp, dead, seats, variant] = a;
+    const view = createVehicleView(type, variant || 0);
+    this.root.add(view.root);
+    view.set(x, y, z, yaw);
+    if (dead) view.setWrecked(true);
+    const v = { id, type, def: VEHICLES[type], view, x, y, z, yaw, speed: 0, hp, dead: !!dead, seats: seats.slice(), buf: [] };
+    this.vehicles.set(id, v);
+    for (const pid of seats) if (pid) this.seatOf.set(pid, v);
+  }
+
+  isMate(id) {
+    return this.teamSize > 1 && !this.watching && id !== this.myId && this.teamOf.get(id) === this.team;
   }
 
   nameOf(id) {
@@ -144,6 +188,16 @@ export class Game {
     }
     this.lastTick = m.n;
     this.aliveCount = m.al;
+    if (m.tl !== undefined) this.teamsAlive = m.tl;
+    if (m.v) {
+      for (const a of m.v) {
+        const v = this.vehicles.get(a[0]);
+        if (!v) continue;
+        v.buf.push({ t: m.tm, x: a[1], y: a[2], z: a[3], yaw: a[4], speed: a[5] });
+        if (v.buf.length > 30) v.buf.shift();
+        v.hp = a[6];
+      }
+    }
 
     const seen = this.seen;
     seen.clear();
@@ -168,7 +222,9 @@ export class Game {
   addRemote(id) {
     const view = createCharacter(id);
     this.root.add(view.root);
-    const r = { id, view, buf: [], x: 0, y: 0, z: 0, yaw: 0, crouch: false, chute: false, dying: 0, stepDist: 0, speed: 0 };
+    const r = { id, view, buf: [], x: 0, y: 0, z: 0, yaw: 0, crouch: false, chute: false, down: false, dying: 0, stepDist: 0, speed: 0 };
+    // Team-mates get a name floating over their head.
+    if (this.isMate(id)) view.root.add(createNameTag(this.nameOf(id)));
     this.players.set(id, r);
     return r;
   }
@@ -188,6 +244,29 @@ export class Game {
     if (drop) pending.splice(0, drop);
     if (this.shots.length) this.shots = this.shots.filter((seq) => seq > ack);
 
+    // Driving: the vehicle is what we predict.
+    if (m.mv && this.myVeh && this.mySeat === 0) {
+      const v = this.vs;
+      const ox = v.x;
+      const oy = v.y;
+      const oz = v.z;
+      v.x = m.mv[0]; v.y = m.mv[1]; v.z = m.mv[2]; v.yaw = m.mv[3]; v.speed = m.mv[4];
+      const def = this.myVeh.def;
+      for (let i = 0; i < pending.length; i++) stepVehicle(this.world, def, v, pending[i], INPUT_DT);
+      const ex = ox - v.x;
+      const ey = oy - v.y;
+      const ez = oz - v.z;
+      const err = ex * ex + ey * ey + ez * ez;
+      if (err > 1e-8) {
+        this.vprev.x -= ex;
+        this.vprev.y -= ey;
+        this.vprev.z -= ez;
+        if (err < 36) this.vcorr.add(v1.set(ex, ey, ez));
+        else this.vcorr.set(0, 0, 0);
+      }
+      return;
+    }
+
     const s = this.s;
     const ox = s.x;
     const oy = s.y;
@@ -198,7 +277,11 @@ export class Game {
     s.ground = (me[6] & PF.GROUND) !== 0;
     s.crouch = (me[6] & PF.CROUCH) !== 0;
     s.chute = (me[6] & PF.CHUTE) !== 0;
-    for (let i = 0; i < pending.length; i++) stepPlayer(this.world, s, pending[i], INPUT_DT);
+    if (me[6] & PF.VEHICLE) return; // riding: our position simply follows the vehicle
+    const down = (me[6] & PF.DOWN) !== 0;
+    for (let i = 0; i < pending.length; i++) {
+      stepPlayer(this.world, s, down ? downedInput(pending[i]) : pending[i], INPUT_DT, this.obstacles);
+    }
 
     const ex = ox - s.x;
     const ey = oy - s.y;
@@ -223,12 +306,15 @@ export class Game {
     this.me.setGear(st.ar, st.bp);
     const wasReload = prev && prev.rl > 0;
     const wasHeal = prev && prev.hl;
+    const wasRevive = prev && prev.rv;
     if (st.rl > 0 && !wasReload) {
       this.hud.startProgress('Reloading', st.rl);
       this.audio.ui('reload');
     } else if (st.hl && st.hl !== wasHeal) {
       this.hud.startProgress('Using ' + HEAL[st.hl].name, HEAL[st.hl].time);
-    } else if ((wasReload && !st.rl) || (wasHeal && !st.hl)) {
+    } else if (st.rv && st.rv !== wasRevive) {
+      this.hud.startProgress('Reviving ' + this.nameOf(st.rv), REVIVE_SECONDS);
+    } else if ((wasReload && !st.rl) || (wasHeal && !st.hl) || (wasRevive && !st.rv)) {
       this.hud.stopProgress();
       if (wasHeal && st.hp > prev.hp) this.audio.ui('heal');
     }
@@ -236,6 +322,32 @@ export class Game {
       this.shots.length = 0;
       this.bloom = 0;
     }
+
+    // Vehicle seat.
+    const veh = st.veh ? this.vehicles.get(st.veh[0]) : null;
+    const seat = veh ? st.veh[1] : -1;
+    if (veh !== this.myVeh || seat !== this.mySeat) {
+      if (!veh && this.myVeh) {
+        // Stepped out: carry on from where the server put us.
+        this.corr.set(0, 0, 0);
+        this.pending.length = 0;
+      }
+      this.myVeh = veh;
+      this.mySeat = seat;
+      if (veh && seat === 0) {
+        // Took the wheel: start predicting from where the vehicle is drawn.
+        this.vs.x = veh.x; this.vs.y = veh.y; this.vs.z = veh.z; this.vs.yaw = veh.yaw; this.vs.speed = veh.speed;
+        copyVehicleState(this.vprev, this.vs);
+        this.vcorr.set(0, 0, 0);
+        this.pending.length = 0;
+      }
+    }
+    if (veh) veh.hp = st.veh[2];
+
+    // Team.
+    if (st.tm) this.hud.setTeam(st.tm.map(([id, hp, state]) => ({ name: this.nameOf(id), hp, state })));
+    if (st.dn && !(prev && prev.dn)) this.audio.ui('lose');
+    this.hud.setDowned(st.dn ? (st.dn === 2 ? 'A team-mate is helping you up' : 'Crawl to a team-mate: they can revive you') : null);
   }
 
   // ---------------------------------------------------------------- events
@@ -246,7 +358,42 @@ export class Game {
       case 'hit':
         this.hud.hitMarker(e[4] ? 'kill' : e[3] ? 'head' : 'hit');
         this.audio.ui(e[4] ? 'kill' : e[3] ? 'head' : 'hit');
+        if (e[4] === 2) this.hud.announce('You knocked down ' + this.nameOf(e[1]));
         break;
+      case 'down': {
+        const mine = e[1] === this.myId || e[2] === this.myId || this.isMate(e[2]);
+        this.hud.killFeed(e[1] ? this.nameOf(e[1]) : null, this.nameOf(e[2]), e[1] ? 'knocked down' : 'is down', mine);
+        if (this.isMate(e[2])) this.hud.announce(this.nameOf(e[2]) + ' is down - revive them!');
+        break;
+      }
+      case 'up':
+        this.hud.killFeed(this.nameOf(e[1]), this.nameOf(e[2]), 'revived', e[1] === this.myId || e[2] === this.myId);
+        break;
+      case 'vin': {
+        const v = this.vehicles.get(e[1]);
+        if (v) {
+          v.seats[e[3]] = e[2];
+          this.seatOf.set(e[2], v);
+        }
+        break;
+      }
+      case 'vout': {
+        const v = this.vehicles.get(e[1]);
+        if (v) {
+          const i = v.seats.indexOf(e[2]);
+          if (i >= 0) v.seats[i] = 0;
+        }
+        this.seatOf.delete(e[2]);
+        break;
+      }
+      case 'vd': {
+        const v = this.vehicles.get(e[1]);
+        if (v) {
+          v.dead = true;
+          v.view.setWrecked(true);
+        }
+        break;
+      }
       case 'dmg': {
         const dx = e[2] - this.s.x;
         const dz = e[3] - this.s.z;
@@ -442,29 +589,43 @@ export class Game {
     const pitch = round5(input.pitch);
     const inp = { seq: ++this.seq, mx: input.mx, mz: input.mz, yaw, pitch, b };
     const s = this.s;
-    copyMoveState(this.prev, s);
+    const driving = this.myVeh && this.mySeat === 0;
     const wasChute = s.chute;
     const wasGround = s.ground;
-    stepPlayer(this.world, s, inp, INPUT_DT);
+    if (driving) {
+      copyVehicleState(this.vprev, this.vs);
+      const before = Math.abs(this.vs.speed);
+      const lost = stepVehicle(this.world, this.myVeh.def, this.vs, inp, INPUT_DT);
+      if (lost > 4 && before > 6) {
+        this.audio.ui('hurt');
+        this.shake = Math.max(this.shake, 0.6);
+      }
+    } else if (!this.myVeh) {
+      copyMoveState(this.prev, s);
+      stepPlayer(this.world, s, this.st && this.st.dn ? downedInput(inp) : inp, INPUT_DT, this.obstacles);
+    }
     this.clock += INPUT_DT;
     if (this.bloom > 0) this.bloom = Math.max(0, this.bloom - BLOOM_DECAY * INPUT_DT);
 
-    if (wasChute && !s.chute) {
-      this.audio.ui('land');
-      this.hud.announce('Find a weapon!', 2500);
-    } else if (!wasGround && s.ground && !wasChute) {
-      this.audio.step(undefined, undefined, true);
-    }
-    if (s.ground) {
-      this.stepDist += Math.sqrt(s.vx * s.vx + s.vz * s.vz) * INPUT_DT;
-      if (this.stepDist > 2.3) {
-        this.stepDist = 0;
+    if (!this.myVeh) {
+      if (wasChute && !s.chute) {
+        this.audio.ui('land');
+        this.hud.announce('Find a weapon!', 2500);
+      } else if (!wasGround && s.ground && !wasChute) {
         this.audio.step(undefined, undefined, true);
+      }
+      if (s.ground) {
+        this.stepDist += Math.sqrt(s.vx * s.vx + s.vz * s.vz) * INPUT_DT;
+        if (this.stepDist > 2.3) {
+          this.stepDist = 0;
+          this.audio.step(undefined, undefined, true);
+        }
       }
     }
 
     const arr = [inp.seq, inp.mx, inp.mz, yaw, pitch, b];
-    if ((b & BTN.FIRE) && !s.chute && this.st) {
+    // Drivers and downed players cannot shoot.
+    if ((b & BTN.FIRE) && !s.chute && this.st && !driving && !this.st.dn) {
       const aim = this.computeAim(yaw, pitch);
       arr.push(aim[0], aim[1], Math.round(this.renderTime));
       this.predictFire(inp.seq, b, aim);
@@ -565,6 +726,9 @@ export class Game {
       case 'drop':
         this.net.send({ t: 'act', a: 'drop' });
         break;
+      case 'use':
+        this.net.send({ t: 'act', a: 'use' });
+        break;
       case 'throw': {
         const k = act.k === 'smoke' ? 'smoke' : 'grenade';
         if (this.s.chute) return;
@@ -621,11 +785,13 @@ export class Game {
         this.net.send({ t: 'i', a: this.outbox });
         this.outbox = [];
       }
-      const a = this.acc / INPUT_DT;
-      const s = this.s;
-      const p = this.prev;
-      this.corr.multiplyScalar(Math.exp(-dt * 12));
-      this.pos.set(p.x + (s.x - p.x) * a + this.corr.x, p.y + (s.y - p.y) * a + this.corr.y, p.z + (s.z - p.z) * a + this.corr.z);
+      if (!this.myVeh) {
+        const a = this.acc / INPUT_DT;
+        const s = this.s;
+        const p = this.prev;
+        this.corr.multiplyScalar(Math.exp(-dt * 12));
+        this.pos.set(p.x + (s.x - p.x) * a + this.corr.x, p.y + (s.y - p.y) * a + this.corr.y, p.z + (s.z - p.z) * a + this.corr.z);
+      }
     } else if (!this.alive && this.input.touch) {
       // Dead on a phone: the fire button cycles the spectated player.
       const down = this.input.fire;
@@ -633,6 +799,7 @@ export class Game {
       this.fireWasDown = down;
     }
 
+    this.updateVehicles(dt);
     this.updateRemotes(dt);
     this.updateSelf(dt);
     this.updateNades(dt);
@@ -644,18 +811,69 @@ export class Game {
     this.updateHud(dt);
   }
 
+  // Places every vehicle: ours from prediction, the others from snapshots.
+  updateVehicles(dt) {
+    const rt = this.renderTime;
+    let n = 0;
+    for (const v of this.vehicles.values()) {
+      if (v === this.myVeh && this.mySeat === 0 && this.alive) {
+        const a = this.acc / INPUT_DT;
+        const p = this.vprev;
+        const c = this.vs;
+        this.vcorr.multiplyScalar(Math.exp(-dt * 12));
+        v.x = p.x + (c.x - p.x) * a + this.vcorr.x;
+        v.y = p.y + (c.y - p.y) * a + this.vcorr.y;
+        v.z = p.z + (c.z - p.z) * a + this.vcorr.z;
+        v.yaw = lerpAngle(p.yaw, c.yaw, a);
+        v.speed = c.speed;
+      } else if (v.buf.length) {
+        const buf = v.buf;
+        let i = buf.length - 1;
+        while (i > 0 && buf[i].t > rt) i--;
+        const a = buf[i];
+        const b = buf[i + 1] || a;
+        let k = b.t > a.t ? (rt - a.t) / (b.t - a.t) : 0;
+        k = k < 0 ? 0 : k > 1 ? 1 : k;
+        v.x = a.x + (b.x - a.x) * k;
+        v.y = a.y + (b.y - a.y) * k;
+        v.z = a.z + (b.z - a.z) * k;
+        v.yaw = lerpAngle(a.yaw, b.yaw, k);
+        v.speed = b.speed;
+      }
+      v.view.set(v.x, v.y, v.z, v.yaw);
+      // Everything except the vehicle we are sitting in is solid to us.
+      if (v !== this.myVeh) n = vehicleCircles(v.def, v, this.obstacles, n);
+    }
+    this.obstacles.length = n;
+    if (this.myVeh && this.alive) {
+      // Seated: we are wherever our seat is.
+      seatPosition(this.myVeh.def, this.myVeh, this.mySeat, seatTmp);
+      this.pos.set(seatTmp.x, seatTmp.y - 0.45, seatTmp.z);
+      const s = this.s;
+      s.x = this.pos.x; s.y = this.pos.y; s.z = this.pos.z;
+      s.vx = -Math.sin(this.myVeh.yaw) * this.myVeh.speed;
+      s.vz = -Math.cos(this.myVeh.yaw) * this.myVeh.speed;
+      s.vy = 0;
+      s.ground = true;
+      s.crouch = false;
+      s.chute = false;
+      copyMoveState(this.prev, s);
+    }
+  }
+
   updateSelf(dt) {
     const s = this.s;
     const view = this.me;
     if (this.alive) {
       view.root.position.copy(this.pos);
-      view.root.rotation.y = this.input.yaw;
+      view.root.rotation.y = this.myVeh ? this.myVeh.yaw : this.input.yaw;
       const st = this.st;
       const armed = !!(st && st.s !== 2 && st.w[st.s]);
       view.setWeapon(armed ? WEAPON_KINDS.indexOf(st.w[st.s][0]) : -1);
       view.update(dt, {
         speed: Math.sqrt(s.vx * s.vx + s.vz * s.vz), pitch: this.input.pitch, crouch: s.crouch, chute: s.chute,
-        ground: s.ground, armed, reloading: !!(st && st.rl), swim: isSwimming(this.world, s),
+        ground: s.ground, armed: armed && !(this.myVeh && this.mySeat === 0), reloading: !!(st && st.rl),
+        swim: isSwimming(this.world, s), seated: !!this.myVeh, down: !!(st && st.dn),
       });
       view.root.visible = !this.scoped;
     } else if (view.dead > 0) {
@@ -697,14 +915,18 @@ export class Game {
       r.yaw = lerpAngle(a.yaw, b.yaw, k);
       r.crouch = (f & PF.CROUCH) !== 0;
       r.chute = (f & PF.CHUTE) !== 0;
+      r.down = (f & PF.DOWN) !== 0;
+      const seated = (f & PF.VEHICLE) !== 0;
+      const ride = seated ? this.seatOf.get(id) : null;
       view.root.position.set(x, y, z);
-      view.root.rotation.y = r.yaw;
+      view.root.rotation.y = ride ? ride.yaw : r.yaw;
       view.setWeapon(b.w);
       view.update(dt, {
         speed: r.speed, pitch: a.pitch + (b.pitch - a.pitch) * k, crouch: r.crouch, chute: r.chute,
         ground: (f & PF.GROUND) !== 0, armed: b.w >= 0, reloading: (f & PF.RELOAD) !== 0, swim: isSwimming(this.world, r),
+        seated, down: r.down,
       });
-      if ((f & PF.GROUND) && r.speed > 3.4 && !r.crouch) {
+      if ((f & PF.GROUND) && r.speed > 3.4 && !r.crouch && !seated) {
         r.stepDist += r.speed * dt;
         if (r.stepDist > 2.3) {
           r.stepDist = 0;
@@ -718,7 +940,8 @@ export class Game {
     const ids = [];
     for (const [id, r] of this.players) if (!r.dying) ids.push(id);
     if (!ids.length) return;
-    ids.sort((a, b) => a - b);
+    // Team-mates first, then everyone else.
+    ids.sort((a, b) => (this.isMate(b) ? 1 : 0) - (this.isMate(a) ? 1 : 0) || a - b);
     const i = ids.indexOf(this.spectateId);
     this.spectateId = ids[(i + 1) % ids.length];
   }
@@ -747,7 +970,15 @@ export class Game {
       eyeTarget = s.crouch ? CROUCH_EYE_HEIGHT : EYE_HEIGHT;
       const ads = input.ads && !s.chute;
       const def = this.activeDef();
-      if (s.chute) {
+      if (this.myVeh) {
+        // Chase camera centred on the vehicle.
+        px = this.myVeh.x;
+        py = this.myVeh.y;
+        pz = this.myVeh.z;
+        wantDist = this.myVeh.def.cam;
+        wantSide = 0;
+        wantUp = 1.1;
+      } else if (s.chute) {
         wantDist = 7.5;
         wantSide = 0;
         wantUp = 1.4;
@@ -761,7 +992,7 @@ export class Game {
       }
       // Smooth out stair steps; follow falls and the parachute directly.
       const dy = py - this.camY;
-      this.camY = Math.abs(dy) > 1.2 || s.chute ? py : this.camY + dy * Math.min(1, dt * 16);
+      this.camY = Math.abs(dy) > 1.2 || s.chute ? py : this.camY + dy * Math.min(1, dt * (this.myVeh ? 8 : 16));
       py = this.camY;
     } else {
       let r = this.players.get(this.spectateId);
@@ -861,7 +1092,7 @@ export class Game {
     // Crosshair spread.
     const def = this.activeDef();
     const ads = this.input.ads && !s.chute;
-    let visible = this.alive && !s.chute && !this.scoped;
+    let visible = this.alive && !s.chute && !this.scoped && !(this.myVeh && this.mySeat === 0) && !(this.st && this.st.dn);
     let gap = 7;
     if (def) {
       let deg = (ads ? def.spreadAds * adsSpreadScale(this.activeAtt()) : def.spread) + this.bloom;
@@ -875,28 +1106,90 @@ export class Game {
     hud.setCrosshair(Math.min(gap, 90), visible);
     hud.setScope(this.scoped);
 
-    // Pickup prompt (weapons only: everything else is collected by walking over it).
+    // Prompts. "Use" actions (E) come first: revive, get out, get in. Then
+    // weapons on the ground (F); everything else is collected by walking over it.
     if (this.frameNo % 6 === 0) {
+      const st = this.st;
+      const free = this.alive && !s.chute && st && !st.dn;
+      let useText = null;
+      let useLabel = null;
+      if (free && this.myVeh) {
+        useLabel = 'EXIT';
+      } else if (free) {
+        const mate = this.downedMateNear();
+        const veh = mate ? null : this.vehicleNear();
+        if (mate) {
+          useText = st.rv ? null : 'Revive ' + this.nameOf(mate.id);
+          useLabel = st.rv ? null : 'REVIVE';
+        } else if (veh) {
+          useText = (veh.seats[0] ? 'Ride in ' : 'Drive ') + veh.def.name;
+          useLabel = veh.seats[0] ? 'RIDE' : 'DRIVE';
+        }
+      }
       let it = null;
-      if (this.alive && !s.chute && this.st) it = this.nearestLoot(false);
+      if (free && !this.myVeh && !useText) it = this.nearestLoot(false);
       if (it !== this.promptItem) {
         this.promptItem = it;
         this.promptSince = performance.now();
       }
-      if (it && performance.now() - this.promptSince > 250) {
-        const full = this.st.w[0] && this.st.w[1];
+      if (useText) {
+        hud.setPrompt(useText, this.input.touch ? null : 'E', 'use');
+      } else if (it && performance.now() - this.promptSince > 250) {
+        const full = st.w[0] && st.w[1];
         hud.setPrompt((full ? 'Swap for ' : 'Pick up ') + ITEMS[it.kind].name, this.input.touch ? null : 'F');
       } else {
         hud.setPrompt(null);
       }
+      hud.setUseButton(this.input.touch ? useLabel : null);
+      hud.setVehicle(this.myVeh && this.alive
+        ? { name: this.myVeh.def.name, kmh: Math.round(Math.abs(this.myVeh.speed) * 3.6), hp: this.myVeh.hp }
+        : null);
     }
 
     const spec = !this.alive ? this.players.get(this.spectateId) : null;
+    const mates = [];
+    if (this.teamSize > 1 && !this.watching) {
+      for (const r of this.players.values()) if (!r.dying && this.isMate(r.id)) mates.push({ x: r.x, z: r.z, down: r.down });
+    }
+    const vehicles = [];
+    for (const v of this.vehicles.values()) if (!v.dead) vehicles.push(v);
     hud.update(dt, {
       circle: this.circle,
       next: z.mode === 'closed' ? null : z.to,
-      me: this.alive ? { x: s.x, z: s.z, yaw: this.input.yaw } : spec ? { x: spec.x, z: spec.z, yaw: spec.yaw } : null,
+      me: this.alive ? { x: s.x, z: s.z, yaw: this.myVeh ? this.myVeh.yaw : this.input.yaw } : spec ? { x: spec.x, z: spec.z, yaw: spec.yaw } : null,
+      others: mates,
+      vehicles,
     });
+  }
+
+  // A knocked-down team-mate within reach, if any.
+  downedMateNear() {
+    if (this.teamSize <= 1) return null;
+    const s = this.s;
+    for (const r of this.players.values()) {
+      if (r.dying || !r.down || !this.isMate(r.id)) continue;
+      if ((r.x - s.x) ** 2 + (r.z - s.z) ** 2 <= REVIVE_RANGE * REVIVE_RANGE && Math.abs(r.y - s.y) < 2) return r;
+    }
+    return null;
+  }
+
+  // The nearest vehicle with a free seat that is close enough to board.
+  vehicleNear() {
+    const s = this.s;
+    let best = null;
+    let bestD = ENTER_RADIUS * ENTER_RADIUS;
+    for (const v of this.vehicles.values()) {
+      if (v.dead || !v.seats.includes(0) || Math.abs(v.y - s.y) > 2.5) continue;
+      vehicleCircles(v.def, v, circleTmp, 0);
+      for (let k = 0; k < 2; k++) {
+        const d2 = (circleTmp[k].x - s.x) ** 2 + (circleTmp[k].z - s.z) ** 2 - v.def.radius * v.def.radius;
+        if (d2 < bestD) {
+          bestD = d2;
+          best = v;
+        }
+      }
+    }
+    return best;
   }
 
   dispose() {
@@ -905,6 +1198,10 @@ export class Game {
       if (o.isInstancedMesh) o.dispose();
     });
     this.hud.setPrompt(null);
+    this.hud.setUseButton(null);
+    this.hud.setVehicle(null);
+    this.hud.setDowned(null);
+    this.hud.setTeam([]);
     this.hud.stopProgress();
     this.hud.setScope(false);
     this.hud.setOutside(false);

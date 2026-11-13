@@ -568,6 +568,16 @@ function addClock(solid, d) {
   }
 }
 
+// Geometry for a drivable vehicle, modelled facing +X with its origin on the
+// ground under its centre.
+export function vehicleGeometry(type, variant) {
+  const b = new GeoBuilder();
+  const d = { x: 0, y: 0, z: 0, ax: 'x', v: variant };
+  if (type === 'lorry') addLorry(b, d);
+  else addAuto(b, d);
+  return b.build();
+}
+
 const BOX_STYLE = {
   floor: { top: 0xa89c8a },
   stairs: {},
@@ -677,8 +687,6 @@ export function buildWorldScene(world, renderer, quality) {
       case 'tree': addTree(solid, leaves, d); break;
       case 'rock': addRock(solid, d); break;
       case 'gable': addGable(solid, d); break;
-      case 'lorry': addLorry(solid, d); break;
-      case 'auto': addAuto(solid, d); break;
       case 'boat': addBoat(leaves, d); break;
       case 'lighthouse': addLighthouse(solid, d); break;
       case 'clock': addClock(leaves, d); break;

@@ -81,7 +81,8 @@ export class Input {
         case 'Digit7': this.act('throw', { k: 'smoke' }); break;
         case 'KeyH': this.act('heal', {}); break;
         case 'KeyQ': this.act('swap'); break;
-        case 'KeyF': case 'KeyE': this.act('pickup'); break;
+        case 'KeyF': this.act('pickup'); break;
+        case 'KeyE': this.act('use'); break;
         case 'KeyG': this.act('drop'); break;
         case 'KeyM': case 'Tab': this.act('map'); break;
         case 'KeyC': this.crouch = !this.crouch; break;
@@ -240,6 +241,7 @@ export class Input {
     });
     tap('t-reload', () => { this.reloadUntil = performance.now() + 150; });
     tap('t-pickup', () => this.act('pickup'));
+    tap('t-use', () => this.act('use'));
   }
 
   // Called when a match starts or ends.
