@@ -5,15 +5,18 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test",
+    "test": "node --test \"tests/*.test.js\"",
     "test:browser": "node scripts/browser-smoke.mjs",
     "map": "node scripts/render-map.mjs docs/map.png",
-    "build": "node scripts/build-static.mjs"
+    "build": "node scripts/build-static.mjs",
+    "test:play": "node scripts/playthrough.mjs",
+    "test:load": "node scripts/loadtest.mjs",
+    "check": "node scripts/check-server.mjs"
   },
   "dependencies": {
     "three": "^0.170.0",

@@ -128,6 +128,36 @@ test('two clients play a private room match from lobby to result', async () => {
   }
 });
 
+test('finished matches are ranked on the leaderboard', async () => {
+  const app = createServer({ env: { BOTS: '0', RESUME_GRACE: '0.1' } });
+  const { port } = await app.listen(0, '127.0.0.1');
+  try {
+    const a = await connect(port);
+    const b = await connect(port);
+    a.send({ t: 'join', name: 'Asha', mode: 'room', room: 'rank', pid: 'a'.repeat(24), skin: [3, 1] });
+    b.send({ t: 'join', name: 'Bala', mode: 'room', room: 'rank', pid: 'not valid', skin: [99, 0] });
+    await b.wait((m) => m.t === 'lobby' && m.players.length === 2);
+    a.send({ t: 'ready' });
+    b.send({ t: 'ready' });
+    const start = await a.wait((m) => m.t === 'start', 8000);
+    const rowA = start.players.find((p) => p[1] === 'Asha');
+    const rowB = start.players.find((p) => p[1] === 'Bala');
+    assert.deepEqual(rowA[4], [3, 1], 'a valid outfit choice is passed on');
+    assert.equal(rowB[4], null, 'an invalid one is dropped');
+    b.send({ t: 'leave' });
+    await a.wait((m) => m.t === 'end', 8000);
+    const board = await (await fetch(`http://127.0.0.1:${port}/api/ws?leaderboard=1`)).json();
+    assert.equal(board.top.length, 1, 'only players with a valid id are ranked');
+    assert.equal(board.top[0].name, 'Asha');
+    assert.equal(board.top[0].wins, 1);
+    assert.ok(board.top[0].points > 100);
+    assert.equal(JSON.stringify(board).includes('aaaa'), false, 'player ids are never exposed');
+    a.ws.close();
+  } finally {
+    await app.close();
+  }
+});
+
 test('practice mode fills the match with bots and starts on its own', async () => {
   const app = createServer({ env: { BOT_FILL: '6' } });
   const { port } = await app.listen(0, '127.0.0.1');

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Match } from '../server/match.js';
 import { mulberry32 } from '../shared/rng.js';
-import { BTN, INPUT_DT, TICK_RATE, SPRINT_SPEED, INTERACT_RADIUS } from '../shared/constants.js';
+import { BTN, INPUT_DT, TICK_RATE, SPRINT_SPEED, INTERACT_RADIUS, RELEVANCY_RADIUS } from '../shared/constants.js';
 import { WEAPONS, THROW, ATT, magSize } from '../shared/items.js';
 import { FIELDS } from '../shared/world.js';
 
@@ -416,4 +416,22 @@ test('attachments change how a weapon behaves on the server', () => {
   const st = JSON.parse(clients[0].raw.map((r) => JSON.parse(r)).filter((x) => x.st).pop().st ? JSON.stringify(clients[0].raw.map((r) => JSON.parse(r)).filter((x) => x.st).pop().st) : '{}');
   assert.deepEqual(st.w[0], ['ar', magSize('ar', ATT.MAG), ATT.MAG]);
   assert.equal(st.gr, 0);
+});
+
+test('players far away are left out of snapshots; team-mates and the dead see everyone', () => {
+  const { m, clients } = startMatch(3);
+  const [a, b, c] = clients.map((x) => x.player);
+  // The map is only a little wider than the radius, so use opposite shores.
+  a.s.x = -150;
+  b.s.x = -160;
+  c.s.x = -150 + RELEVANCY_RADIUS + 15;
+  m.step();
+  const idsFor = (i) => JSON.parse(clients[i].raw.at(-1)).p.map((x) => x[0]).sort();
+  assert.deepEqual(idsFor(0), [a.id, b.id], 'the distant player is not sent');
+  assert.deepEqual(idsFor(2), [c.id], 'and they do not get us either');
+  assert.equal(JSON.parse(clients[0].raw.at(-1)).al, 3, 'the alive count still covers everyone');
+  // Eliminated players spectate, so they receive the whole match.
+  m.damage(a, 500, b, 'ar', false);
+  m.step();
+  assert.deepEqual(idsFor(0), [b.id, c.id]);
 });

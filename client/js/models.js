@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { GeoBuilder, vehicleGeometry } from './scene.js';
 import { WEAPON_KINDS, ITEMS, AMMO } from '/shared/items.js';
+import { OUTFITS, HATS } from '/shared/cosmetics.js';
 
 const lambert = new Map();
 function mat(color) {
@@ -161,11 +162,33 @@ function parachuteGeometry() {
 let chuteGeo = null;
 const chuteMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide });
 
+function addHat(head, index) {
+  const hat = HATS[index];
+  if (!hat || !hat.color) return;
+  switch (hat.name) {
+    case 'Cap':
+      head.add(part(0.34, 0.1, 0.34, hat.color, 0, 0.4, 0.01), part(0.3, 0.03, 0.18, hat.color, 0, 0.36, -0.24));
+      break;
+    case 'Headband':
+      head.add(part(0.34, 0.06, 0.34, hat.color, 0, 0.27, 0.0));
+      break;
+    case 'Straw Hat':
+      head.add(part(0.66, 0.03, 0.66, hat.color, 0, 0.37, 0), part(0.32, 0.13, 0.32, hat.color, 0, 0.44, 0));
+      break;
+    case 'Helmet':
+      head.add(part(0.38, 0.2, 0.38, hat.color, 0, 0.36, 0.01), part(0.4, 0.04, 0.42, 0x3c4530, 0, 0.27, -0.01));
+      break;
+    default:
+  }
+}
+
 // A blocky humanoid facing -Z. Returns an object with update() for animation.
-export function createCharacter(id) {
-  const shirt = SHIRTS[(id * 7 + 3) % SHIRTS.length];
-  const pants = PANTS[(id * 5 + 1) % PANTS.length];
-  const skin = SKIN[(id * 3 + 2) % SKIN.length];
+// skin: optional [outfit, hat] chosen by the player; bots get colours from their id.
+export function createCharacter(id, skin) {
+  const outfit = skin ? OUTFITS[skin[0]] : null;
+  const shirt = outfit ? outfit.shirt : SHIRTS[(id * 7 + 3) % SHIRTS.length];
+  const pants = outfit ? outfit.pants : PANTS[(id * 5 + 1) % PANTS.length];
+  const tone = SKIN[(id * 3 + 2) % SKIN.length];
   const hair = HAIR[id % HAIR.length];
 
   const root = new THREE.Group();
@@ -194,17 +217,18 @@ export function createCharacter(id) {
 
   const head = new THREE.Group();
   head.position.set(0, 0.62, 0);
-  head.add(part(0.3, 0.3, 0.3, skin, 0, 0.17, 0));
+  head.add(part(0.3, 0.3, 0.3, tone, 0, 0.17, 0));
   head.add(part(0.32, 0.12, 0.32, hair, 0, 0.3, 0.01));
   head.add(part(0.32, 0.2, 0.1, hair, 0, 0.2, 0.12));
+  if (skin) addHat(head, skin[1]);
   torso.add(head);
 
   const armL = new THREE.Group();
   const armR = new THREE.Group();
   armL.position.set(-0.33, 0.54, 0);
   armR.position.set(0.33, 0.54, 0);
-  armL.add(part(0.14, 0.3, 0.15, shirt, 0, -0.13, 0), part(0.12, 0.32, 0.13, skin, 0, -0.42, 0));
-  armR.add(part(0.14, 0.3, 0.15, shirt, 0, -0.13, 0), part(0.12, 0.32, 0.13, skin, 0, -0.42, 0));
+  armL.add(part(0.14, 0.3, 0.15, shirt, 0, -0.13, 0), part(0.12, 0.32, 0.13, tone, 0, -0.42, 0));
+  armR.add(part(0.14, 0.3, 0.15, shirt, 0, -0.13, 0), part(0.12, 0.32, 0.13, tone, 0, -0.42, 0));
   torso.add(armL, armR);
 
   // The weapon is parented to the torso and pitched with the aim.

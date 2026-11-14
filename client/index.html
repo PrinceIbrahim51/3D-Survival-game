@@ -148,11 +148,32 @@
       <h2 id="lobby-title">Lobby</h2>
       <p id="lobby-sub" class="tag"></p>
       <div id="lobby-count" class="countdown"></div>
+      <div id="lobby-invite" class="invite hidden">
+        <input id="invite-link" readonly>
+        <button id="invite-copy">Copy invite link</button>
+      </div>
       <ul id="lobby-players"></ul>
       <div class="buttons row">
         <button id="lobby-ready" class="primary">Ready</button>
         <button id="lobby-leave">Leave</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===================== profile ===================== -->
+  <div id="profile" class="overlay hidden">
+    <div class="panel">
+      <h2>Profile</h2>
+      <p class="tag">Level <b id="prof-level">1</b> <span id="prof-xp"></span></p>
+      <div class="xpbar"><i id="prof-bar"></i></div>
+      <div class="stats" id="prof-stats"></div>
+      <h3>Outfit</h3>
+      <div class="swatches" id="prof-outfits"></div>
+      <h3>Hat</h3>
+      <div class="swatches" id="prof-hats"></div>
+      <h3>Top players on this server</h3>
+      <ol id="prof-board"><li class="dim">Loading...</li></ol>
+      <div class="buttons row"><button id="prof-close" class="primary">Done</button><span></span></div>
     </div>
   </div>
 
@@ -175,6 +196,7 @@
     <div class="panel">
       <h2 id="result-title"></h2>
       <p id="result-sub" class="tag"></p>
+      <p id="result-xp" class="xpline"></p>
       <table id="result-table"><thead><tr><th>#</th><th>Player</th><th>Kills</th><th>Damage</th></tr></thead><tbody></tbody></table>
       <div class="buttons row">
         <button id="result-again" class="primary">Play again</button>

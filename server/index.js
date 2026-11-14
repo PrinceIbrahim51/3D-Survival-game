@@ -13,6 +13,8 @@ import { getWorld } from '../shared/world.js';
 import { getNav } from './nav.js';
 import { Matchmaker } from './matchmaker.js';
 import { runSelfTest } from './selftest.js';
+import { Leaderboard } from './leaderboard.js';
+import { cleanSkin } from '../shared/cosmetics.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATIC = [
@@ -53,6 +55,8 @@ export function createServer(options = {}) {
     ...options.matchmaking,
   });
 
+  const leaderboard = new Leaderboard(env.DATA_DIR || null);
+  matchmaker.onMatch = (match) => leaderboard.record(match);
   const debugSpawn = env.DEBUG_SPAWN === '1'; // never enable on a public server
   // STATIC_DIR serves one pre-built folder (the output of `npm run build`)
   // instead of the source folders.
@@ -88,7 +92,8 @@ export function createServer(options = {}) {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(body));
       };
-      if (url.searchParams.has('selftest')) selfTest(req, url.searchParams.get('selftest') === 'full').then(reply);
+      if (url.searchParams.has('leaderboard')) reply({ ok: true, top: leaderboard.top(20) });
+      else if (url.searchParams.has('selftest')) selfTest(req, url.searchParams.get('selftest') === 'full').then(reply);
       else reply({ ok: true, instance: instanceId, sessions: sessions.size, ...matchmaker.stats() });
       return;
     }
@@ -121,7 +126,19 @@ export function createServer(options = {}) {
     res.writeHead(404).end('Not found');
   });
 
-  const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
+  // Snapshots are repetitive text, so WebSocket compression with a shared
+  // dictionary per connection shrinks them a lot (set WS_COMPRESS=0 to turn off).
+  const wss = new WebSocketServer({
+    server,
+    maxPayload: 16 * 1024,
+    perMessageDeflate: env.WS_COMPRESS === '0' ? false : {
+      zlibDeflateOptions: { level: 3, memLevel: 7 },
+      serverMaxWindowBits: 13,
+      clientNoContextTakeover: true,
+      threshold: 160,
+      concurrencyLimit: 16,
+    },
+  });
   let nextClientId = 1;
   const maxClients = num(env.MAX_CLIENTS, 200);
 
@@ -220,6 +237,8 @@ export function createServer(options = {}) {
           break;
         case 'join': {
           client.name = sanitizeName(msg.name);
+          client.skin = cleanSkin(msg.skin);
+          client.pid = typeof msg.pid === 'string' && /^[a-f0-9]{16,40}$/.test(msg.pid) ? msg.pid : null;
           client.debugSpawn = debugSpawn && Array.isArray(msg.spawn) && msg.spawn.slice(0, 3).every(Number.isFinite) ? msg.spawn.slice(0, 3) : null;
           const err = matchmaker.join(client, msg);
           if (err) client.send({ t: 'error', msg: err });
@@ -282,6 +301,7 @@ export function createServer(options = {}) {
     server,
     wss,
     matchmaker,
+    leaderboard,
     sessions,
     instanceId,
     listen(port = num(env.PORT, 3000), host = env.HOST || '0.0.0.0') {
@@ -289,6 +309,7 @@ export function createServer(options = {}) {
     },
     close() {
       clearInterval(timer);
+      leaderboard.close();
       for (const c of sessions.values()) clearTimeout(c.graceTimer);
       for (const ws of wss.clients) ws.terminate();
       return new Promise((resolve) => wss.close(() => server.close(() => resolve())));

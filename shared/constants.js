@@ -49,6 +49,10 @@ export const PICKUP_RADIUS = 1.5; // automatic pickup range
 export const INTERACT_RADIUS = 2.6; // manual pickup range
 export const INTERP_DELAY_MS = 100; // how far in the past remote players are drawn
 export const MAX_REWIND_MS = 400; // lag-compensation limit
+// Players further away than this are not sent to a client at all (team-mates
+// always are). It saves bandwidth in big matches and gives a modified client
+// less to reveal.
+export const RELEVANCY_RADIUS = 230;
 
 // Input button bit flags.
 export const BTN = {

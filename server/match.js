@@ -10,7 +10,7 @@ import {
 import {
   TICK_DT, TICK_MS, INPUT_DT, BTN, BTN_MASK, PF, MAX_HP, PICKUP_RADIUS, INTERACT_RADIUS,
   MAX_REWIND_MS, CHUTE_ALTITUDE, CHUTE_FALL, eyeHeight, dirFromAngles,
-  DOWN_HP, BLEED_SECONDS, REVIVE_SECONDS, REVIVE_HP, REVIVE_RANGE,
+  DOWN_HP, BLEED_SECONDS, REVIVE_SECONDS, REVIVE_HP, REVIVE_RANGE, RELEVANCY_RADIUS,
 } from '../shared/constants.js';
 import {
   VEHICLES, ENTER_RADIUS, makeVehicleState, stepVehicle, seatPosition, vehicleCircles,
@@ -609,10 +609,19 @@ export class Match {
   // ------------------------------------------------------------------- loot
 
   spawnLoot() {
+    // Bigger matches get proportionally more loot at each spot.
+    const mult = Math.max(1, this.total / 16);
     for (const sp of this.world.lootSpawns) {
       if (this.rnd() > this.opts.lootChance) continue;
       const kind = rollLoot(sp.tier, this.rnd);
       this.addLoot(kind, sp.x, sp.y, sp.z, defaultAmount(kind), null, true);
+      const extra = Math.floor(mult - 1 + this.rnd());
+      for (let k = 0; k < extra; k++) {
+        const more = rollLoot(sp.tier, this.rnd);
+        const ex = sp.x + (this.rnd() - 0.5) * 1.6;
+        const ez = sp.z + (this.rnd() - 0.5) * 1.6;
+        this.addLoot(more, ex, floorAt(this.world, ex, ez, sp.y + 0.3), ez, defaultAmount(more), null, true);
+      }
       if (ITEMS[kind].type === 'weapon') {
         const ammo = ammoItemKind(WEAPONS[kind].ammo);
         const x = sp.x + (this.rnd() - 0.5) * 1.2;
@@ -1305,13 +1314,19 @@ export class Match {
   }
 
   sendSnapshots() {
-    const arr = [];
+    // One pre-built piece of text per living player; each client gets the
+    // pieces for the players relevant to it.
+    const segs = [];
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       const w = Inv.activeWeapon(p.inv);
-      arr.push([p.id, r2(p.s.x), r2(p.s.y), r2(p.s.z), r3(p.yaw), r3(p.pitch), this.flagsOf(p), w ? WEAPON_KINDS.indexOf(w.kind) : -1]);
+      segs.push({
+        p,
+        str: JSON.stringify([p.id, r2(p.s.x), r2(p.s.y), r2(p.s.z), r2(p.yaw), r2(p.pitch), this.flagsOf(p), w ? WEAPON_KINDS.indexOf(w.kind) : -1]),
+      });
     }
-    const shared = JSON.stringify(arr);
+    const everyone = '[' + segs.map((g) => g.str).join(',') + ']';
+    const R2 = RELEVANCY_RADIUS * RELEVANCY_RADIUS;
     // Only vehicles that moved or changed lately are worth sending.
     const veh = [];
     for (const v of this.vehicles.values()) {
@@ -1343,6 +1358,16 @@ export class Match {
         if (p.events.length) evs = evs.concat(p.events);
       }
       if (evs.length) msg += ',"e":' + JSON.stringify(evs);
+      let shared = everyone;
+      if (p && p.alive) {
+        // The dead and people watching follow others around, so they get everyone.
+        const parts = [];
+        for (let i = 0; i < segs.length; i++) {
+          const q = segs[i].p;
+          if (q === p || q.team === p.team || (q.s.x - p.s.x) ** 2 + (q.s.z - p.s.z) ** 2 <= R2) parts.push(segs[i].str);
+        }
+        if (parts.length !== segs.length) shared = '[' + parts.join(',') + ']';
+      }
       c.sendRaw(msg + ',"p":' + shared + '}');
     }
     for (const p of this.players.values()) p.events.length = 0;

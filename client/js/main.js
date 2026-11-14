@@ -10,6 +10,7 @@ import { Hud } from './hud.js';
 import { GameAudio } from './audio.js';
 import { Game } from './game.js';
 import { causeText } from './hud.js';
+import { loadProfile, saveProfile, recordMatch, OUTFITS, HATS, levelOf } from './profile.js';
 
 const $ = (id) => document.getElementById(id);
 const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -25,6 +26,9 @@ function saveSettings() {
     localStorage.setItem('pls-settings', JSON.stringify(settings));
   } catch { /* ignore */ }
 }
+
+const profile = loadProfile();
+saveProfile(profile);
 
 // ------------------------------------------------------------------ renderer
 const canvas = $('view');
@@ -161,6 +165,7 @@ async function join(mode) {
   const dbg = new URLSearchParams(location.search).get('spawn');
   net.send({
     t: 'join', name: settings.name, mode, room: settings.room, team: settings.team,
+    skin: [profile.outfit, profile.hat], pid: profile.pid,
     spawn: dbg ? dbg.split(',').map(Number) : undefined,
   });
   if (isTouch) {
@@ -189,6 +194,100 @@ function setTeamSize(n) {
 for (const b of teamButtons) b.addEventListener('click', () => setTeamSize(Number(b.dataset.team)));
 setTeamSize(settings.team);
 const TEAM_NAMES = { 1: 'Solo', 2: 'Duo', 4: 'Squad' };
+
+// An invite link (?room=CODE&team=2) fills in the private room for a friend.
+{
+  const q = new URLSearchParams(location.search);
+  const code = (q.get('room') || '').toUpperCase();
+  if (/^[A-Z0-9]{3,12}$/.test(code)) {
+    $('room').value = code;
+    settings.room = code;
+    setTeamSize(Number(q.get('team')) || 1);
+    $('menu-error').textContent = '';
+    $('conn').textContent = `You were invited to room ${code}. Enter a name and press Private Room.`;
+  }
+}
+$('invite-copy').addEventListener('click', async () => {
+  const link = $('invite-link').value;
+  try {
+    await navigator.clipboard.writeText(link);
+    $('invite-copy').textContent = 'Copied';
+  } catch {
+    $('invite-link').select();
+    $('invite-copy').textContent = 'Press Ctrl+C';
+  }
+  setTimeout(() => { $('invite-copy').textContent = 'Copy invite link'; }, 1800);
+});
+
+// ---- profile panel
+function renderProfile() {
+  const lv = levelOf(profile.xp);
+  $('prof-level').textContent = lv.level;
+  $('prof-xp').textContent = `  -  ${lv.into} / ${lv.need} XP to the next level`;
+  $('prof-bar').style.width = Math.round((lv.into / lv.need) * 100) + '%';
+  const stats = [['Matches', profile.matches], ['Wins', profile.wins], ['Kills', profile.kills], ['Best', profile.best ? '#' + profile.best : '-']];
+  const box = $('prof-stats');
+  box.textContent = '';
+  for (const [label, value] of stats) {
+    const d = document.createElement('div');
+    const b = document.createElement('b');
+    b.textContent = value;
+    d.append(b, label);
+    box.append(d);
+  }
+  const fill = (el, list, key, color) => {
+    el.textContent = '';
+    list.forEach((item, i) => {
+      const btn = document.createElement('button');
+      const locked = item.level > lv.level;
+      const sw = document.createElement('i');
+      sw.style.background = color(item);
+      btn.append(sw, locked ? `Level ${item.level}` : item.name);
+      btn.classList.toggle('on', profile[key] === i);
+      btn.classList.toggle('locked', locked);
+      btn.disabled = locked;
+      btn.addEventListener('click', () => {
+        profile[key] = i;
+        saveProfile(profile);
+        renderProfile();
+      });
+      el.append(btn);
+    });
+  };
+  const hex = (n) => '#' + n.toString(16).padStart(6, '0');
+  fill($('prof-outfits'), OUTFITS, 'outfit', (o) => `linear-gradient(90deg, ${hex(o.shirt)} 60%, ${hex(o.pants)} 60%)`);
+  fill($('prof-hats'), HATS, 'hat', (h) => (h.color ? hex(h.color) : 'transparent'));
+}
+$('open-profile').addEventListener('click', async () => {
+  renderProfile();
+  $('profile').classList.remove('hidden');
+  const board = $('prof-board');
+  try {
+    const res = await fetch('/api/ws?leaderboard=1');
+    const data = await res.json();
+    board.textContent = '';
+    if (!data.top.length) {
+      const li = document.createElement('li');
+      li.className = 'dim';
+      li.textContent = 'Nobody yet. Finish a match to get on the board.';
+      board.append(li);
+    }
+    for (const row of data.top) {
+      const li = document.createElement('li');
+      const pts = document.createElement('span');
+      pts.textContent = row.points + ' pts';
+      li.append(row.name, pts);
+      board.append(li);
+    }
+  } catch {
+    board.textContent = '';
+    const li = document.createElement('li');
+    li.className = 'dim';
+    li.textContent = 'The leaderboard could not be loaded.';
+    board.append(li);
+  }
+});
+$('prof-close').addEventListener('click', () => $('profile').classList.add('hidden'));
 $('name').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') join('quick');
 });
@@ -290,6 +389,8 @@ net.on('lobby', (m) => {
     ? 'You and bots against bots.'
     : `${humans} of ${m.max} players${m.bots ? ', bots fill the empty seats' : ''}. Ready up to start sooner.`) + teamNote;
   $('lobby-count').textContent = m.startsIn === null ? 'Waiting for another player' : m.startsIn > 0 ? 'Starts in ' + m.startsIn : 'Starting...';
+  $('lobby-invite').classList.toggle('hidden', m.mode !== 'room');
+  if (m.mode === 'room') $('invite-link').value = `${location.origin}/?room=${m.room}${m.teamSize > 1 ? '&team=' + m.teamSize : ''}`;
   const list = $('lobby-players');
   list.textContent = '';
   let meMarked = false;
@@ -382,6 +483,14 @@ net.on('end', (m) => {
     $('result-sub').textContent = m.you
       ? `${m.you.kills} kill${m.you.kills === 1 ? '' : 's'}  -  ${m.you.damage} damage dealt` + (won ? '' : winners ? `  -  winner: ${winners}` : '')
       : '';
+    // Progression: every finished match earns experience.
+    $('result-xp').textContent = '';
+    if (m.you && m.you.place > 0 && !game.recorded) {
+      game.recorded = true;
+      const r = recordMatch(profile, { place: m.you.place, total: m.total, kills: m.you.kills, damage: m.you.damage, won });
+      $('result-xp').textContent = `+${r.gained} XP`
+        + (r.leveledUp ? `  -  Level ${r.level}!` + (r.unlocked.length ? ' Unlocked: ' + r.unlocked.join(', ') : '') : `  -  Level ${r.level}`);
+    }
     const body = document.querySelector('#result-table tbody');
     body.textContent = '';
     for (const r of m.rows) {

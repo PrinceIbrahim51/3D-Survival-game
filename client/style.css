@@ -120,6 +120,25 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 .controls b { color: var(--text); background: rgba(255, 255, 255, 0.1); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
 .controls .wide { grid-column: 1 / -1; margin-top: 4px; }
 
+.invite { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 12px; }
+.invite input { padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0, 0, 0, 0.35); font-size: 13px; min-width: 0; user-select: text; -webkit-user-select: text; }
+.invite button { padding: 9px 12px; font-size: 13px; }
+h3 { margin: 14px 0 6px; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+.xpbar { height: 8px; background: rgba(255, 255, 255, 0.15); border-radius: 4px; overflow: hidden; }
+.xpbar i { display: block; height: 100%; width: 0; background: var(--accent); }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 12px; }
+.stats div { background: rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 6px 4px; text-align: center; font-size: 11px; color: var(--dim); }
+.stats div b { display: block; font-size: 18px; color: var(--text); }
+.swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.swatches button { padding: 6px 4px; font-size: 11px; font-weight: 600; line-height: 1.2; text-align: center; }
+.swatches button i { display: block; height: 16px; border-radius: 4px; margin-bottom: 4px; }
+.swatches button.on { outline: 2px solid var(--accent); }
+.swatches button.locked { opacity: 0.4; cursor: default; }
+#prof-board { margin: 0; padding-left: 22px; font-size: 13px; max-height: 110px; overflow-y: auto; }
+#prof-board li { padding: 2px 0; }
+#prof-board .dim { color: var(--dim); list-style: none; margin-left: -22px; }
+#prof-board span { color: var(--accent); float: right; }
+.xpline { margin: -8px 0 10px; font-size: 14px; font-weight: 700; color: var(--accent2); min-height: 18px; }
 .countdown { font-size: 44px; font-weight: 900; color: var(--accent); margin: 4px 0 10px; font-variant-numeric: tabular-nums; }
 #lobby-players { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-height: 34vh; overflow-y: auto; }
 #lobby-players li { background: rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 8px 10px; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
@@ -259,7 +278,7 @@ summary { cursor: pointer; color: var(--dim); font-size: 13px; text-transform: u
 #teampanel .mate.down i { background: var(--bad); }
 #teampanel .mate.dead { opacity: 0.45; }
 #teampanel .mate.dead span { color: var(--dim); text-decoration: line-through; }
-#vehinfo { position: absolute; left: 50%; bottom: calc(118px + var(--safe-b)); transform: translateX(-50%); background: rgba(13, 27, 36, 0.7); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; font-size: 14px; font-weight: 700; text-align: center; min-width: 170px; }
+#vehinfo { position: absolute; left: 50%; top: calc(62px + var(--safe-t)); transform: translateX(-50%); background: rgba(13, 27, 36, 0.7); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; font-size: 14px; font-weight: 700; text-align: center; min-width: 170px; }
 #vehinfo b { color: var(--accent); margin-right: 8px; }
 #vehinfo .bar { height: 6px; margin-top: 4px; }
 #vehinfo .bar i { background: #c9ced1; }
@@ -311,7 +330,7 @@ body.compact #counters .small { display: none; }
 body.compact #killfeed { font-size: 11px; max-width: 34vw; }
 body.compact #teampanel { top: calc(84px + var(--safe-t)); width: 112px; }
 body.compact #teampanel .mate { padding: 2px 6px 4px; font-size: 10px; }
-body.compact #vehinfo { bottom: calc(112px + var(--safe-b)); font-size: 12px; padding: 4px 10px; }
+body.compact #vehinfo { top: calc(46px + var(--safe-t)); font-size: 12px; padding: 4px 10px; }
 body.compact #zoneinfo { font-size: 12px; min-width: 150px; padding: 4px 10px 6px; }
 
 @media (max-height: 430px) {

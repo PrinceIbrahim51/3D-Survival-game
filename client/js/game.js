@@ -62,9 +62,11 @@ export class Game {
     this.aliveCount = start.total;
     this.names = new Map();
     this.teamOf = new Map();
-    for (const [id, name, bot, team] of start.players) {
+    this.skins = new Map();
+    for (const [id, name, bot, team, skin] of start.players) {
       this.names.set(id, { name, bot: !!bot });
       this.teamOf.set(id, team);
+      if (skin) this.skins.set(id, skin);
     }
     this.team = start.team || 0;
     this.teamSize = start.teamSize || 1;
@@ -111,7 +113,7 @@ export class Game {
     this.shake = 0;
     for (const k of start.smokes || []) this.effects.smoke(v1.set(k[0], k[1], k[2]), THROW.smoke.radius, k[3]);
 
-    this.me = createCharacter(this.myId);
+    this.me = createCharacter(this.myId, this.skins.get(this.myId));
     this.root.add(this.me.root);
     this.players = new Map();
     this.seen = new Set();
@@ -211,7 +213,14 @@ export class Game {
       if (r.buf.length > 40) r.buf.shift();
     }
     for (const [id, r] of this.players) {
-      if (!seen.has(id) && !r.dying) this.killRemote(id);
+      if (seen.has(id)) {
+        r.missing = 0;
+      } else if (!r.dying && ++r.missing > 8) {
+        // Not eliminated (that arrives as an event): they moved out of the
+        // range the server sends us. Drop them quietly.
+        r.view.dispose();
+        this.players.delete(id);
+      }
     }
 
     if (m.me && this.alive) this.reconcile(m);
@@ -220,9 +229,9 @@ export class Game {
   }
 
   addRemote(id) {
-    const view = createCharacter(id);
+    const view = createCharacter(id, this.skins.get(id));
     this.root.add(view.root);
-    const r = { id, view, buf: [], x: 0, y: 0, z: 0, yaw: 0, crouch: false, chute: false, down: false, dying: 0, stepDist: 0, speed: 0 };
+    const r = { id, view, buf: [], x: 0, y: 0, z: 0, yaw: 0, crouch: false, chute: false, down: false, dying: 0, stepDist: 0, speed: 0, missing: 0 };
     // Team-mates get a name floating over their head.
     if (this.isMate(id)) view.root.add(createNameTag(this.nameOf(id)));
     this.players.set(id, r);
@@ -1108,7 +1117,10 @@ export class Game {
 
     // Prompts. "Use" actions (E) come first: revive, get out, get in. Then
     // weapons on the ground (F); everything else is collected by walking over it.
-    if (this.frameNo % 6 === 0) {
+    // Refreshed ten times a second, whatever the frame rate.
+    const nowMs = performance.now();
+    if (nowMs - (this.promptAt || 0) >= 100) {
+      this.promptAt = nowMs;
       const st = this.st;
       const free = this.alive && !s.chute && st && !st.dn;
       let useText = null;
