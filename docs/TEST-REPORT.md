@@ -11,7 +11,7 @@ One round of regression, sanity, smoke, functional and load testing was run on t
 | Smoke | `scripts/browser-smoke.mjs`: two browsers in one private room see each other move; one leaves, the other wins | 6 of 6 passed |
 | Functional | `scripts/playthrough.mjs`: every feature played through a real browser, desktop and phone layouts | 101 of 101 passed |
 | Load | `scripts/loadtest.mjs`: real connections, 16 to 100 players | Within budget at every size |
-| Deployment check | `GET /api/ws?selftest=full` on the live site after deploying | See the end of this report |
+| Deployment check | `GET /api/ws?selftest=full` on the live site after deploying, plus the page and new files fetched from it | Passed |
 
 ## Problems reported from play-testing, and what was done
 
@@ -82,3 +82,17 @@ npm run test:browser             # smoke
 npm run test:play                # functional (about 8 minutes without a GPU)
 npm run test:load                # load
 ```
+
+## Deployment check
+
+The tested commit (`fb6e2cd`) was deployed to Vercel production and checked on the public address, https://project-last-stand-pi.vercel.app.
+
+| Check | Result |
+| --- | --- |
+| Vercel build of the tested commit | Ready, production target, region `bom1`, built in about 10 seconds |
+| GitHub Actions CI on the same commit | Passed |
+| `GET /api/ws?selftest=full`: the deployment plays the start of a match against itself over real WebSockets | `ok: true`. Steps completed: hello, lobby, start, input, hand-over, snapshots continue. 12 players, 179 loot items, 30 snapshots a second, hand-over landed on the same instance |
+| `GET /api/ws?leaderboard=1` | `ok: true`, empty table (no ranked matches played on this instance yet) |
+| Page and files | The menu page served is the new build (team size selector, Profile and Watch buttons, vehicle and team panels); `shared/cosmetics.js`, a file that only exists in this build, is served |
+
+Every push to the deployment branch builds and publishes again, so the same check should be repeated after any later change.
